@@ -77,7 +77,7 @@ NOFiles=<number of files>            # Number of created files before oldest is 
 SyncBehavior=<strategy>              # Specify sync strategy. Default: Sync'ed after every message. See Logstorage Ringbuffer Implementation below.
 EcuID=<ECUid>                        # Specify ECU identifier
 SpecificSize=<spec size in bytes>    # Store logs in storage devices after specific size is reached.
-GzipCompression=<on or off>          # Write the logfiles with gzip compression.
+GzipCompression=<ON/OFF>             # Write the logfiles with gzip compression.
 OverwriteBehavior=<strategy>         # Specify overwrite strategy. Default: Delete oldest file and continue. See Logstorage Ringbuffer Implementation below.
 DisableNetwork=<ON/OFF>              # Specify if the message shall be routed to network client.
 ```
@@ -336,3 +336,56 @@ the clients are able to update any log level to user contexts.
 
 By setting ```MaintainLogstorageLogLevel=ON``` or ```MaintainLogstorageLogLevel=1```
 or not set, the logstorage will maintain its log level as the highest priority.
+
+## Logstorage Negative Filter
+
+The DLT Logstorage also provides negative filter feature, which allows filtering
+unwanted Application or Context.
+
+The following strategies are implemented:
+- Exclude a pair of Application and Context
+
+  ```
+  [FILTER1]
+  ...
+  ExcludedLogAppName=LOG
+  ExcludedContextName=TEST
+  ```
+- Exclude single Application or list of Applications
+
+  ```
+  [FILTER1]
+  ...
+  ExcludedLogAppName=LOG
+
+  [FILTER2]
+  ...
+  ExcludedLogAppName=LOG1,LOG2,LOG3
+  ```
+- Exclude single Context or list of Contexts
+
+  ```
+  [FILTER1]
+  ...
+  ExcludedContextName=TEST
+
+  [FILTER2]
+  ...
+  ExcludedContextName=TEST1,TEST2,TEST3
+  ```
+
+Note :
+
+DLT offline logstorage does not support multiple Application and multiple Context filter.
+The following configuration is not supported and the behavior will be undefinded:
+  ```
+  [FILTER1]
+  ...
+  LogAppName=LOG1,LOG2,LOG3
+  ContextName=TEST1,TEST2,TEST3
+
+  [FILTER2]
+  ...
+  ExcludedLogAppName=LOG1,LOG2,LOG3
+  ExcludedContextName=TEST1,TEST2,TEST3
+  ```

@@ -68,13 +68,17 @@ DLT_STATIC int dlt_logstorage_count_ids(const char *str);
 
 DLT_STATIC int dlt_logstorage_read_number(unsigned int *number, char *value);
 
-DLT_STATIC int dlt_logstorage_read_bool(unsigned int *boolean, char *value);
-
 DLT_STATIC int dlt_logstorage_read_list_of_names(char **names, const char *value);
 
 DLT_STATIC int dlt_logstorage_check_apids(DltLogStorageFilterConfig *config, char *value);
 
 DLT_STATIC int dlt_logstorage_check_ctids(DltLogStorageFilterConfig *config, char *value);
+
+DLT_STATIC int dlt_logstorage_store_config_excluded_apids(DltLogStorageFilterConfig *config, char *value);
+
+DLT_STATIC int dlt_logstorage_store_config_excluded_ctids(DltLogStorageFilterConfig *config, char *value);
+
+DLT_STATIC bool dlt_logstorage_check_excluded_ids(char *id, char *delim, char *excluded_ids);
 
 DLT_STATIC int dlt_logstorage_check_loglevel(DltLogStorageFilterConfig *config, char *value);
 

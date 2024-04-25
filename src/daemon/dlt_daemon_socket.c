@@ -48,6 +48,10 @@
 #include <linux/stat.h>
 #endif
 
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+#include <systemd/sd-daemon.h>
+#endif
+
 #include "dlt_types.h"
 #include "dlt-daemon.h"
 #include "dlt-daemon_cfg.h"
@@ -202,7 +206,11 @@ int dlt_daemon_socket_get_send_qeue_max_size(int sock)
 {
     int n = 0;
     socklen_t m = sizeof(n);
-    getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (void *)&n, &m);
+    if (getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (void *)&n, &m) < 0) {
+        dlt_vlog(LOG_ERR,
+                 "%s: socket get failed!\n", __func__);
+        return -errno;
+    }
 
     return n;
 }
@@ -220,6 +228,14 @@ int dlt_daemon_socket_sendreliable(int sock, void *data_buffer, int message_size
         if (ret < 0) {
             dlt_vlog(LOG_WARNING,
                      "%s: socket send failed [errno: %d]!\n", __func__, errno);
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+            /* notify systemd here that we are still alive
+             * otherwise we might miss notifying the watchdog when
+             * the watchdog interval is small and multiple timeouts occur back to back
+             */
+            if (sd_notify(0, "WATCHDOG=1") < 0)
+                dlt_vlog(LOG_WARNING, "%s: Could not reset systemd watchdog\n", __func__);
+#endif
             return DLT_DAEMON_ERROR_SEND_FAILED;
         } else {
             data_sent += ret;
@@ -228,4 +244,3 @@ int dlt_daemon_socket_sendreliable(int sock, void *data_buffer, int message_size
 
     return DLT_DAEMON_ERROR_OK;
 }
-

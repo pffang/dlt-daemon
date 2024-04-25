@@ -86,6 +86,10 @@
 #include "dlt_daemon_socket.h"
 #include "dlt_daemon_serial.h"
 
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+#   include <systemd/sd-daemon.h>
+#endif
+
 char *app_recv_buffer = NULL; /* pointer to receiver buffer for application msges */
 
 static int dlt_daemon_cmp_apid(const void *m1, const void *m2)
@@ -931,7 +935,7 @@ DltDaemonContext *dlt_daemon_context_add(DltDaemon *daemon,
         return (DltDaemonContext *)NULL;
 
     if (user_list->contexts == NULL) {
-        user_list->contexts = (DltDaemonContext *)malloc(sizeof(DltDaemonContext) * DLT_DAEMON_CONTEXT_ALLOC_SIZE);
+        user_list->contexts = (DltDaemonContext *)calloc(1, sizeof(DltDaemonContext) * DLT_DAEMON_CONTEXT_ALLOC_SIZE);
 
         if (user_list->contexts == NULL)
             return (DltDaemonContext *)NULL;
@@ -953,7 +957,7 @@ DltDaemonContext *dlt_daemon_context_add(DltDaemon *daemon,
             if ((user_list->num_contexts % DLT_DAEMON_CONTEXT_ALLOC_SIZE) == 0) {
                 /* allocate memory for context in steps of DLT_DAEMON_CONTEXT_ALLOC_SIZE, e.g 100 */
                 old = user_list->contexts;
-                user_list->contexts = (DltDaemonContext *)malloc((size_t) sizeof(DltDaemonContext) *
+                user_list->contexts = (DltDaemonContext *)calloc(1, (size_t) sizeof(DltDaemonContext) *
                                                                  ((user_list->num_contexts /
                                                                    DLT_DAEMON_CONTEXT_ALLOC_SIZE) + 1) *
                                                                  DLT_DAEMON_CONTEXT_ALLOC_SIZE);
@@ -1635,7 +1639,10 @@ void dlt_daemon_control_reset_to_factory_default(DltDaemon *daemon,
     if (fd != NULL) {
         /* Close and delete file */
         fclose(fd);
-        unlink(filename);
+        if (unlink(filename) != 0) {
+            dlt_vlog(LOG_WARNING, "%s: unlink() failed: %s\n",
+                    __func__, strerror(errno));
+        }
     }
 
     fd = fopen(filename1, "r");
@@ -1643,7 +1650,10 @@ void dlt_daemon_control_reset_to_factory_default(DltDaemon *daemon,
     if (fd != NULL) {
         /* Close and delete file */
         fclose(fd);
-        unlink(filename1);
+        if (unlink(filename1) != 0) {
+            dlt_vlog(LOG_WARNING, "%s: unlink() failed: %s\n",
+                    __func__, strerror(errno));
+        }
     }
 
     daemon->default_log_level = (int8_t) InitialContextLogLevel;
@@ -1837,3 +1847,14 @@ void dlt_daemon_change_state(DltDaemon *daemon, DltDaemonState newState)
         break;
     }
 }
+
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+void dlt_daemon_trigger_systemd_watchdog_if_necessary(unsigned int* last_trigger_time, unsigned int watchdog_trigger_interval) {
+    unsigned int uptime = dlt_uptime();
+    if ((uptime - *last_trigger_time) / 10000 >= watchdog_trigger_interval) {
+        if (sd_notify(0, "WATCHDOG=1") < 0)
+            dlt_vlog(LOG_WARNING, "%s: Could not reset systemd watchdog\n", __func__);
+        *last_trigger_time = uptime;
+    }
+}
+#endif

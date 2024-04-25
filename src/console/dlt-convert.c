@@ -120,8 +120,8 @@ void usage()
     printf("  -v            Verbose mode\n");
     printf("  -c            Count number of messages\n");
     printf("  -f filename   Enable filtering of messages\n");
-    printf("  -b number     First messages to be handled\n");
-    printf("  -e number     Last message to be handled\n");
+    printf("  -b number     First <number> messages to be handled\n");
+    printf("  -e number     Last <number> messages to be handled\n");
     printf("  -w            Follow dlt file while file is increasing\n");
     printf("  -t            Handling input compressed files (tar.gz)\n");
 }
@@ -134,8 +134,10 @@ void empty_dir(const char *dir)
     char tmp_filename[FILENAME_SIZE] = { 0 };
     uint32_t i;
 
-    if (dir == NULL)
+    if (dir == NULL) {
         fprintf(stderr, "ERROR: %s: invalid arguments\n", __FUNCTION__);
+        return;
+    }
 
     if (stat(dir, &st) == 0) {
         if (S_ISDIR(st.st_mode)) {
@@ -206,7 +208,8 @@ int main(int argc, char *argv[])
 
     /* For handling compressed files */
     char tmp_filename[FILENAME_SIZE] = { 0 };
-    struct stat st = { 0 };
+    struct stat st;
+    memset(&st, 0, sizeof(struct stat));
     struct dirent **files = { 0 };
     int n = 0;
     int i = 0;
@@ -409,7 +412,6 @@ int main(int argc, char *argv[])
                 if (ovalue)
                     close(ohandle);
 
-                dlt_file_free(&file, vflag);
                 return -1;
             }
 
@@ -418,7 +420,6 @@ int main(int argc, char *argv[])
                 if (ovalue)
                     close(ohandle);
 
-                dlt_file_free(&file, vflag);
                 return -1;
             }
 

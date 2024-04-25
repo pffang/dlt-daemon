@@ -95,10 +95,6 @@ static int dlt_daemon_check_numeric_setting(char *token,
                                             char *value,
                                             unsigned long *data);
 
-#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-static uint32_t watchdog_trigger_interval;  /* watchdog trigger interval in [s] */
-#endif
-
 /* used in main event loop and signal handler */
 int g_exit = 0;
 
@@ -389,6 +385,7 @@ int option_file_parser(DltDaemonLocal *daemon_local)
     daemon_local->daemonFifoSize = 0;
     daemon_local->flags.sendECUSoftwareVersion = 0;
     memset(daemon_local->flags.pathToECUSoftwareVersion, 0, sizeof(daemon_local->flags.pathToECUSoftwareVersion));
+    memset(daemon_local->flags.ecuSoftwareVersionFileField, 0, sizeof(daemon_local->flags.ecuSoftwareVersionFileField));
     daemon_local->flags.sendTimezone = 0;
     daemon_local->flags.offlineLogstorageMaxDevices = 0;
     daemon_local->flags.offlineLogstorageDirPath[0] = 0;
@@ -629,6 +626,13 @@ int option_file_parser(DltDaemonLocal *daemon_local)
                         strncpy(daemon_local->flags.pathToECUSoftwareVersion, value,
                                 sizeof(daemon_local->flags.pathToECUSoftwareVersion) - 1);
                         daemon_local->flags.pathToECUSoftwareVersion[sizeof(daemon_local->flags.pathToECUSoftwareVersion)
+                                                                     - 1] = 0;
+                        /*printf("Option: %s=%s\n",token,value); */
+                    }
+                    else if (strcmp(token, "ECUSoftwareVersionFileField") == 0) {
+                        strncpy(daemon_local->flags.ecuSoftwareVersionFileField, value,
+                                sizeof(daemon_local->flags.ecuSoftwareVersionFileField) - 1);
+                        daemon_local->flags.ecuSoftwareVersionFileField[sizeof(daemon_local->flags.ecuSoftwareVersionFileField)
                                                                      - 1] = 0;
                         /*printf("Option: %s=%s\n",token,value); */
                     }
@@ -1260,7 +1264,7 @@ int main(int argc, char *argv[])
         if (watchdogUSec)
             watchdogTimeoutSeconds = atoi(watchdogUSec) / 2000000;
 
-        watchdog_trigger_interval = watchdogTimeoutSeconds;
+        daemon.watchdog_trigger_interval = watchdogTimeoutSeconds;
         create_timer_fd(&daemon_local,
                         watchdogTimeoutSeconds,
                         watchdogTimeoutSeconds,
@@ -1906,9 +1910,118 @@ int dlt_daemon_local_connection_init(DltDaemon *daemon,
     return 0;
 }
 
+static char* file_read_everything(FILE* const file, const size_t sizeLimit)
+{
+    if (!file) {
+        return NULL;
+    }
+
+    /* Get the file size. Bail out if stat fails. */
+    const int fd = fileno(file);
+    struct stat s_buf = {0};
+    if (fstat(fd, &s_buf) < 0) {
+        dlt_log(LOG_WARNING, "failed to stat file size\n");
+        fclose(file);
+        return -1;
+    }
+
+    /* Size limit includes NULL terminator. */
+    const off_t size = s_buf.st_size;
+    if (size < 0 || size >= sizeLimit) {
+        dlt_log(LOG_WARNING, "file size invalid\n");
+        fclose(file);
+        return NULL;
+    }
+
+    char* const string = malloc((size_t)size + 1);
+    if (!string) {
+        dlt_log(LOG_WARNING, "failed to allocate string for file contents\n");
+        fclose(file);
+        return NULL;
+    }
+
+    off_t offset = 0;
+    while (!feof(file)) {
+        offset += (off_t)fread(string + offset, 1, (size_t)size, file);
+
+        if (ferror(file)) {
+            dlt_log(LOG_WARNING, "failed to read file\n");
+            free(string);
+            fclose(file);
+            return NULL;
+        }
+
+        if (offset > size) {
+            dlt_log(LOG_WARNING, "file too long for buffer\n");
+            free(string);
+            fclose(file);
+            return NULL;
+        }
+    }
+
+    string[offset] = '\0'; /* append null termination at end of string */
+
+    return string;
+}
+
+static char* file_read_field(FILE* const file, const char* const fieldName)
+{
+    if (!file) {
+        return NULL;
+    }
+
+    const char* const kDelimiters = "\r\n\"\'=";
+    const size_t fieldNameLen = strlen(fieldName);
+
+    char* result = NULL;
+
+    char* buffer = NULL;
+    ssize_t bufferSize = 0;
+
+    while (true) {
+        ssize_t lineSize = getline(&buffer, &bufferSize, file);
+        if (lineSize < 0 || !buffer) {
+            /* end of file */
+            break;
+        }
+
+        char* line = buffer;
+
+        /* trim trailing delimiters */
+        while (lineSize >= 1 && strchr(kDelimiters, line[lineSize - 1]) != NULL) {
+            line[lineSize - 1] = '\0';
+            --lineSize;
+        }
+
+        /* check fieldName */
+        if (   strncmp(line, fieldName, fieldNameLen) == 0
+            && lineSize >= (fieldNameLen + 1)
+            && strchr(kDelimiters, line[fieldNameLen]) != NULL
+           ) {
+            /* trim fieldName */
+            line += fieldNameLen;
+
+            /* trim delimiter */
+            ++line;
+
+            /* trim leading delimiters */
+            while (*line != '\0' && strchr(kDelimiters, *line) != NULL) {
+                ++line;
+                --lineSize;
+            }
+
+            result = strdup(line);
+            break;
+        }
+    }
+
+    free(buffer);
+
+    return result;
+}
+
 int dlt_daemon_local_ecu_version_init(DltDaemon *daemon, DltDaemonLocal *daemon_local, int verbose)
 {
-    char *version = NULL;
     FILE *f = NULL;
 
     PRINT_FUNCTION_VERBOSE(verbose);
@@ -1925,59 +2038,15 @@ int dlt_daemon_local_ecu_version_init(DltDaemon *daemon, DltDaemonLocal *daemon_
         return -1;
     }
 
-    /* Get the file size. Bail out if stat fails. */
-    int fd = fileno(f);
-    struct stat s_buf;
-
-    if (fstat(fd, &s_buf) < 0) {
-        dlt_log(LOG_WARNING, "Failed to stat ECU Software version file.\n");
-        fclose(f);
-        return -1;
+    if (daemon_local->flags.ecuSoftwareVersionFileField[0] != '\0') {
+        daemon->ECUVersionString = file_read_field(f, daemon_local->flags.ecuSoftwareVersionFileField);
+    } else {
+        daemon->ECUVersionString = file_read_everything(f, DLT_DAEMON_TEXTBUFSIZE);
     }
 
-    /* Bail out if file is too large. Use DLT_DAEMON_TEXTBUFSIZE max.
-     * Reserve one byte for trailing '\0' */
-    off_t size = s_buf.st_size;
-
-    if (size >= DLT_DAEMON_TEXTBUFSIZE) {
-        dlt_log(LOG_WARNING, "Too large file for ECU version.\n");
-        fclose(f);
-        return -1;
-    }
-
-    /* Allocate permanent buffer for version info */
-    version = malloc((size_t) (size + 1));
-
-    if (version == 0) {
-        dlt_log(LOG_WARNING, "Cannot allocate memory for ECU version.\n");
-        fclose(f);
-        return -1;
-    }
-
-    off_t offset = 0;
-
-    while (!feof(f)) {
-        offset += (off_t) fread(version + offset, 1, (size_t) size, f);
-
-        if (ferror(f)) {
-            dlt_log(LOG_WARNING, "Failed to read ECU Software version file.\n");
-            free(version);
-            fclose(f);
-            return -1;
-        }
-
-        if (offset > size) {
-            dlt_log(LOG_WARNING, "Too long file for ECU Software version info.\n");
-            free(version);
-            fclose(f);
-            return -1;
-        }
-    }
-
-    version[offset] = '\0';/*append null termination at end of version string */
-    daemon->ECUVersionString = version;
     fclose(f);
-    return 0;
+
+    return (daemon->ECUVersionString != NULL) ? 0 : -1;
 }
 
 void dlt_daemon_local_cleanup(DltDaemon *daemon, DltDaemonLocal *daemon_local, int verbose)
@@ -2006,7 +2075,10 @@ void dlt_daemon_local_cleanup(DltDaemon *daemon, DltDaemonLocal *daemon_local, i
     unlink(daemon_local->flags.daemonFifoName);
 #else /* DLT_DAEMON_USE_UNIX_SOCKET_IPC */
     /* Try to delete existing pipe, ignore result of unlink() */
-    unlink(daemon_local->flags.appSockPath);
+    if (unlink(daemon_local->flags.appSockPath) != 0) {
+        dlt_vlog(LOG_WARNING, "%s: unlink() failed: %s\n",
+                __func__, strerror(errno));
+    }
 #endif
 
 #ifdef DLT_SHM_ENABLE
@@ -2028,7 +2100,10 @@ void dlt_daemon_local_cleanup(DltDaemon *daemon, DltDaemonLocal *daemon_local, i
     if (daemon->ECUVersionString != NULL)
         free(daemon->ECUVersionString);
 
-    unlink(daemon_local->flags.ctrlSockPath);
+    if (unlink(daemon_local->flags.ctrlSockPath) != 0) {
+        dlt_vlog(LOG_WARNING, "%s: unlink() failed: %s\n",
+                __func__, strerror(errno));
+    }
 
     /* free IP list */
     free(daemon_local->flags.ipNodes);
@@ -2324,7 +2399,7 @@ int dlt_daemon_process_client_connect(DltDaemon *daemon,
                               POLLIN,
                               DLT_CONNECTION_CLIENT_MSG_TCP)) {
         dlt_log(LOG_ERR, "Failed to register new client. \n");
-        /* TODO: Perform clean-up */
+        close(in_sock);
         return -1;
     }
 
@@ -2785,8 +2860,13 @@ int dlt_daemon_process_user_messages(DltDaemon *daemon,
             break;
 
         /* Set new start offset */
-        if (offset > 0)
-            dlt_receiver_remove(receiver, offset);
+        if (offset > 0) {
+            if (dlt_receiver_remove(receiver, offset) == -1) {
+                dlt_log(LOG_WARNING,
+                        "Can't remove offset from receiver\n");
+                return -1;
+            }
+        }
 
         if (userheader->message >= DLT_USER_MESSAGE_NOT_SUPPORTED)
             func = dlt_daemon_process_user_message_not_sup;
@@ -3672,7 +3752,7 @@ int dlt_daemon_send_ringbuffer_to_client(DltDaemon *daemon, DltDaemonLocal *daem
     static uint8_t data[DLT_DAEMON_RCVBUFSIZE];
     int length;
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-    uint32_t curr_time;
+    uint32_t curr_time = 0U;
 #endif
 
     PRINT_FUNCTION_VERBOSE(verbose);
@@ -3687,24 +3767,9 @@ int dlt_daemon_send_ringbuffer_to_client(DltDaemon *daemon, DltDaemonLocal *daem
         return DLT_DAEMON_ERROR_OK;
     }
 
-#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-
-    if (sd_notify(0, "WATCHDOG=1") < 0)
-        dlt_vlog(LOG_WARNING, "Could not reset systemd watchdog: %s\n", strerror(errno));
-
-    curr_time = dlt_uptime();
-#endif
-
     while ((length = dlt_buffer_copy(&(daemon->client_ringbuffer), data, sizeof(data))) > 0) {
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-
-        if ((dlt_uptime() - curr_time) / 10000 >= watchdog_trigger_interval) {
-            if (sd_notify(0, "WATCHDOG=1") < 0)
-                dlt_log(LOG_WARNING, "Could not reset systemd watchdog\n");
-
-            curr_time = dlt_uptime();
-        }
-
+        dlt_daemon_trigger_systemd_watchdog_if_necessary(&curr_time, daemon->watchdog_trigger_interval);
 #endif
 
         if ((ret =

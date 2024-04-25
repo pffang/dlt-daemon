@@ -72,18 +72,15 @@
 #define DLT_OFFLINE_LOGSTORAGE_MAX_KEY_LEN         15  /* Maximum size for key */
 #define DLT_OFFLINE_LOGSTORAGE_MAX_FILE_NAME_LEN   100 /* Maximum file name length of the log file including path under mount point */
 
-#define DLT_OFFLINE_LOGSTORAGE_FILE_EXTENSION_LEN       4
 #define DLT_OFFLINE_LOGSTORAGE_GZ_FILE_EXTENSION_LEN    7
 #define DLT_OFFLINE_LOGSTORAGE_INDEX_LEN                3
 #define DLT_OFFLINE_LOGSTORAGE_MAX_INDEX              999
 #define DLT_OFFLINE_LOGSTORAGE_TIMESTAMP_LEN           16
 #define DLT_OFFLINE_LOGSTORAGE_INDEX_OFFSET        (DLT_OFFLINE_LOGSTORAGE_TIMESTAMP_LEN + \
-                                                    DLT_OFFLINE_LOGSTORAGE_FILE_EXTENSION_LEN + \
                                                     DLT_OFFLINE_LOGSTORAGE_INDEX_LEN)
 #define DLT_OFFLINE_LOGSTORAGE_MAX_LOG_FILE_LEN    (DLT_OFFLINE_LOGSTORAGE_MAX_FILE_NAME_LEN + \
                                                     DLT_OFFLINE_LOGSTORAGE_TIMESTAMP_LEN + \
-                                                    DLT_OFFLINE_LOGSTORAGE_INDEX_LEN + \
-                                                    DLT_OFFLINE_LOGSTORAGE_FILE_EXTENSION_LEN + 1)
+                                                    DLT_OFFLINE_LOGSTORAGE_INDEX_LEN + 1)
 
 #define DLT_OFFLINE_LOGSTORAGE_CONFIG_FILE_NAME    "dlt_logstorage.conf"
 
@@ -115,16 +112,22 @@
 #define DLT_OFFLINE_LOGSTORAGE_IS_STRATEGY_SET(S, s) ((S)&(s))
 
 /* Offline Logstorage overwrite strategies */
-#define DLT_LOGSTORAGE_OVERWRITE_ERROR         -1 /* error case */
-#define DLT_LOGSTORAGE_OVERWRITE_UNSET          0 /* strategy not set */
-#define DLT_LOGSTORAGE_OVERWRITE_DISCARD_OLD    1 /* default, discard old */
-#define DLT_LOGSTORAGE_OVERWRITE_DISCARD_NEW   (1 << 1) /* discard new */
+#define DLT_LOGSTORAGE_OVERWRITE_ERROR          -1 /* error case */
+#define DLT_LOGSTORAGE_OVERWRITE_UNSET           0 /* strategy not set */
+#define DLT_LOGSTORAGE_OVERWRITE_DISCARD_OLD     1 /* default, discard old */
+#define DLT_LOGSTORAGE_OVERWRITE_DISCARD_NEW    (1 << 1) /* discard new */
 
 /* Offline Logstorage disable network routing */
 #define DLT_LOGSTORAGE_DISABLE_NW_ERROR         -1 /* error case */
 #define DLT_LOGSTORAGE_DISABLE_NW_UNSET          0 /* not set */
 #define DLT_LOGSTORAGE_DISABLE_NW_OFF            1 /* default, enable network routing */
 #define DLT_LOGSTORAGE_DISABLE_NW_ON            (1 << 1) /* disable network routing */
+
+/* Offline Logstorage disable network routing */
+#define DLT_LOGSTORAGE_GZIP_ERROR               -1 /* error case */
+#define DLT_LOGSTORAGE_GZIP_UNSET                0 /* not set */
+#define DLT_LOGSTORAGE_GZIP_OFF                  1 /* default, enable network routing */
+#define DLT_LOGSTORAGE_GZIP_ON                  (1 << 1) /* disable network routing */
 
 /* logstorage max cache */
 extern unsigned int g_logstorage_cache_max;
@@ -174,6 +177,8 @@ struct DltLogStorageFilterConfig
     /* filter section */
     char *apids;                    /* Application IDs configured for filter */
     char *ctids;                    /* Context IDs configured for filter */
+    char *excluded_apids;           /* Excluded Application IDs configured for filter */
+    char *excluded_ctids;           /* Excluded Context IDs configured for filter */
     int log_level;                  /* Log level number configured for filter */
     int reset_log_level;            /* reset Log level to be sent on disconnect */
     char *file_name;                /* File name for log storage configured for filter */
@@ -209,9 +214,7 @@ struct DltLogStorageFilterConfig
                                int status);
     FILE *log;                      /* current open log file */
     int fd;                         /* The file descriptor for the active log file */
-#ifdef DLT_LOGSTORAGE_USE_GZIP
-    gzFile gzlog;                   /* current open gz log file */
-#endif
+    gzFile *gzlog;                  /* current open gz log file */
     void *cache;                    /* log data cache */
     unsigned int specific_size;     /* cache size used for specific_size sync strategy */
     unsigned int current_write_file_offset;    /* file offset for specific_size sync strategy */
@@ -268,6 +271,8 @@ typedef struct {
 typedef enum {
     DLT_LOGSTORAGE_FILTER_CONF_LOGAPPNAME = 0,
     DLT_LOGSTORAGE_FILTER_CONF_CONTEXTNAME,
+    DLT_LOGSTORAGE_FILTER_CONF_EXCLUDED_LOGAPPNAME,
+    DLT_LOGSTORAGE_FILTER_CONF_EXCLUDED_CONTEXTNAME,
     DLT_LOGSTORAGE_FILTER_CONF_LOGLEVEL,
     DLT_LOGSTORAGE_FILTER_CONF_RESET_LOGLEVEL,
     DLT_LOGSTORAGE_FILTER_CONF_FILE,

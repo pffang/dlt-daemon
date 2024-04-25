@@ -21,7 +21,7 @@ you can [learn more](#learn-more) about advanced concepts and features.
 
 COVESA DLT provides a log and trace interface, based on the standardised
 protocol specified in the
-[AUTOSAR standard 4 DLT](https://www.autosar.org/fileadmin/standards/R22-11/CP/AUTOSAR_SWS_DiagnosticLogAndTrace.pdf).
+[AUTOSAR Classic Platform R19-11 DLT](https://www.autosar.org/fileadmin/standards/R19-11/CP/AUTOSAR_SWS_DiagnosticLogAndTrace.pdf).
 It is used by other COVESA components but can serve as logging framework for
 other applications without relation to COVESA.
 
@@ -92,6 +92,9 @@ make
 optional: sudo make install
 optional: sudo ldconfig # in case you executed make install
 ```
+
+For DLT on Cygwin please refer to [Build and Install DLT on Cygwin](doc/dlt_on_Cygwin.md)
+
 CMake accepts a plethora of [build options](doc/dlt_build_options.md) to
 configure the build to suit your needs.
 
@@ -239,8 +242,6 @@ file in src/core\_dump\_handler/cityhash\_c.
 
 
 ## Contact
-
-Methner, Michael <mmethner@de.adit-jv.com>,
-Le Van, Khanh <Khanh.LeVan@vn.bosch.com>
+Michael Methner <Michael.Methner@de.bosch.com>; Minh Luu Quang <Minh.LuuQuang@vn.bosch.com>
 
 ![alt text](doc/images/covesa-logo.png "COVESA logo")
