@@ -573,20 +573,26 @@ int option_file_parser(DltDaemonLocal *daemon_local)
                     else if (strcmp(token, "RingbufferMinSize") == 0)
                     {
                         if (dlt_daemon_check_numeric_setting(token,
-                                value, &(daemon_local->RingbufferMinSize)) < 0)
+                                value, &(daemon_local->RingbufferMinSize)) < 0) {
+                            fclose (pFile);
                             return -1;
+                        }
                     }
                     else if (strcmp(token, "RingbufferMaxSize") == 0)
                     {
                         if (dlt_daemon_check_numeric_setting(token,
-                                value, &(daemon_local->RingbufferMaxSize)) < 0)
+                                value, &(daemon_local->RingbufferMaxSize)) < 0) {
+                            fclose (pFile);
                             return -1;
+                        }
                     }
                     else if (strcmp(token, "RingbufferStepSize") == 0)
                     {
                         if (dlt_daemon_check_numeric_setting(token,
-                                value, &(daemon_local->RingbufferStepSize)) < 0)
+                                value, &(daemon_local->RingbufferStepSize)) < 0) {
+                            fclose (pFile);
                             return -1;
+                        }
                     }
                     else if (strcmp(token, "SharedMemorySize") == 0)
                     {
@@ -755,8 +761,10 @@ int option_file_parser(DltDaemonLocal *daemon_local)
                     else if (strcmp(token, "DaemonFIFOSize") == 0)
                     {
                         if (dlt_daemon_check_numeric_setting(token,
-                                value, &(daemon_local->daemonFifoSize)) < 0)
+                                value, &(daemon_local->daemonFifoSize)) < 0) {
+                            fclose (pFile);
                             return -1;
+                        }
 #ifndef __linux__
                             printf("Option DaemonFIFOSize is set but only supported on Linux. Ignored.\n");
 #endif
@@ -1922,7 +1930,7 @@ static char* file_read_everything(FILE* const file, const size_t sizeLimit)
     if (fstat(fd, &s_buf) < 0) {
         dlt_log(LOG_WARNING, "failed to stat file size\n");
         fclose(file);
-        return -1;
+        return NULL;
     }
 
     /* Size limit includes NULL terminator. */
@@ -3478,7 +3486,22 @@ int dlt_daemon_process_user_message_log(DltDaemon *daemon,
         /* Not enough bytes received to remove*/
         return DLT_DAEMON_ERROR_UNKNOWN;
 
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+    const unsigned int start_time = dlt_uptime();
+#endif
+
     while (1) {
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+        const unsigned int uptime = dlt_uptime();
+        if ((uptime - start_time) / 10000 > daemon->watchdog_trigger_interval) {
+            dlt_vlog(LOG_WARNING,
+                     "spent already 1 watchdog trigger interval in %s, yielding to process other events.\n", __func__);
+            if (sd_notify(0, "WATCHDOG=1") < 0)
+                dlt_vlog(LOG_CRIT, "Could not reset systemd watchdog from %s\n", __func__);
+            break;
+        }
+#endif
+
         /* get log message from SHM then store into receiver buffer */
         size = dlt_shm_pull(&(daemon_local->dlt_shm),
                             daemon_local->recv_buf_shm,
