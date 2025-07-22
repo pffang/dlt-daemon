@@ -143,6 +143,10 @@ typedef struct
     DltDaemonContextLogSettings *context_log_level_settings;
     int num_context_log_level_settings;
 #endif
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    DltTraceLoadSettings* trace_load_settings;
+    uint32_t trace_load_settings_count;
+#endif
 } DltDaemonApplication;
 
 /**
@@ -203,10 +207,17 @@ typedef struct
 #endif
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
     unsigned int watchdog_trigger_interval;  /* watchdog trigger interval in [s] */
+    unsigned int watchdog_last_trigger_time; /* when the watchdog was last triggered in [s] */
 #endif
 #ifdef DLT_LOG_LEVEL_APP_CONFIG
     DltDaemonContextLogSettings *app_id_log_level_settings; /**< Settings for app id specific log levels */
     int num_app_id_log_level_settings;  /** < count of log level settings */
+#endif
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    DltTraceLoadSettings *preconfigured_trace_load_settings; /**< Settings for trace load */
+    int preconfigured_trace_load_settings_count;  /** < count of trace load settings */
+    int bytes_sent;
+    int bytes_recv;
 #endif
 } DltDaemon;
 
@@ -286,6 +297,22 @@ DltDaemonContextLogSettings *dlt_daemon_find_configured_app_id_ctx_id_settings(
  */
 DltDaemonContextLogSettings *dlt_daemon_find_app_log_level_config(
         const DltDaemonApplication *app, const char *ctid);
+
+#endif
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+/**
+ * Find information about trace load settings for a specific apid
+ * @param daemon pointer to dlt daemon structure
+ * @param apid pointer to the application id
+ * @param ctid pointer to the context id, may be NULL
+ * @param settings pointer to the settings array
+ * @param num_settings number of settings found matching the given data
+ * @param verbose if set to true verbose information is printed out
+ * @return pointer to load settings if found, NULL otherwise
+ */
+DltReturnValue
+dlt_daemon_find_preconfigured_trace_load_settings(DltDaemon *const daemon, const char *apid, const char *ctid, DltTraceLoadSettings **settings, int *num_settings, int verbose);
+int dlt_daemon_compare_trace_load_settings(const void *a, const void *b);
 
 #endif
 
@@ -504,6 +531,18 @@ int dlt_daemon_user_send_log_level(DltDaemon *daemon, DltDaemonContext *context,
  */
 int dlt_daemon_user_send_log_state(DltDaemon *daemon, DltDaemonApplication *app, int verbose);
 
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+/**
+ * Send user message DLT_USER_MESSAGE_TRACE_LOAD to user application
+ * This message configures the warning and limit thresholds for an application
+ * @param daemon pointer to dlt daemon structure
+ * @param app pointer to application for response
+ * @param verbose if set to true verbose information is printed out.
+ * @return negative value if there was an error
+ */
+int dlt_daemon_user_send_trace_load_config(DltDaemon *daemon, DltDaemonApplication *app, int verbose);
+#endif
+
 /**
  * Send user messages to all user applications using default context, or trace status
  * to update those values
@@ -568,7 +607,12 @@ void dlt_daemon_control_reset_to_factory_default(DltDaemon *daemon,
 void dlt_daemon_change_state(DltDaemon *daemon, DltDaemonState newState);
 
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-void dlt_daemon_trigger_systemd_watchdog_if_necessary(unsigned int* last_trigger_time, unsigned int watchdog_trigger_interval);
+/**
+ * Trigger the systemd watchdog when the timeout has been reached
+ * @param daemon pointer to dlt daemon structure
+ * @return true if the watchdog has been triggered
+ */
+bool dlt_daemon_trigger_systemd_watchdog_if_necessary(DltDaemon *daemon);
 #endif
 
 #   ifdef __cplusplus

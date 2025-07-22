@@ -82,7 +82,7 @@ OverwriteBehavior=<strategy>         # Specify overwrite strategy. Default: Dele
 DisableNetwork=<ON/OFF>              # Specify if the message shall be routed to network client.
 ```
 
-The Parameter "SyncBehavior", "OverwriteBehavior", "DisableNetwork", "EcuID" and
+The Parameters "SyncBehavior", "GzipCompression", "OverwriteBehavior", "DisableNetwork", "EcuID" and
 "SpecificSize" are optional - all others are mandatory.
 
 If both of the parameter "LogAppName" and "ContextName" are set to wildcard or
@@ -234,7 +234,7 @@ The following procedure can be used to test Offline Logstorage:
 
 - Create the device folder
 
-  ```$ mkdir -p /var/dltlog```
+  ```$ mkdir -p /var/dltlogs```
 
 - Create the configuration file "dlt\_logstorage.conf" in this folder
   and define filter configuration(s):
@@ -251,7 +251,7 @@ The following procedure can be used to test Offline Logstorage:
 
 - Trigger dlt-daemon to use a new device
 
-  ```$ dlt-logstorage-ctrl -c 1 -p /var/dltlog```
+  ```$ dlt-logstorage-ctrl -c 1 -p /var/dltlogs```
 
 - Start dlt-example-user
 

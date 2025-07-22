@@ -89,11 +89,32 @@
  \{
  */
 
-static int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local, char *str, int verbose);
+#define DLT_DAEMON_APP_ID "DLTD"
+#define DLT_DAEMON_CTX_ID "INTM"
+
+
+static int dlt_daemon_log_internal(DltDaemon *daemon,
+                                   DltDaemonLocal *daemon_local, char *str,
+                                   DltLogLevelType level, const char *app_id,
+                                   const char *ctx_id, int verbose);
 
 static int dlt_daemon_check_numeric_setting(char *token,
                                             char *value,
                                             unsigned long *data);
+
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+
+struct DltTraceLoadLogParams {
+    DltDaemon *daemon;
+    DltDaemonLocal *daemon_local;
+    int verbose;
+    char *app_id;
+};
+
+static DltReturnValue dlt_daemon_output_internal_msg(DltLogLevelType loglevel, const char *text, void *params);
+
+pthread_rwlock_t trace_load_rw_lock;
+#endif
 
 /* used in main event loop and signal handler */
 int g_exit = 0;
@@ -205,6 +226,10 @@ void usage()
     printf("  -a filename   The filename for load default app id log levels (Default: " CONFIGURATION_FILES_DIR "/dlt-log-levels.conf)\n");
 #endif
 
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    printf("  -l filename   The filename for load limits (Default: " CONFIGURATION_FILES_DIR "/dlt-trace-load.conf)\n");
+#endif
+
 #
 } /* usage() */
 
@@ -246,6 +271,9 @@ int option_handling(DltDaemonLocal *daemon_local, int argc, char *argv[])
 #ifdef DLT_LOG_LEVEL_APP_CONFIG
     strcpy(options + strlen(options), "a:");
 #endif
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    strcpy(options + strlen(options), "l:");
+#endif
     while ((c = getopt(argc, argv, options)) != -1)
         switch (c) {
         case 'd':
@@ -262,6 +290,13 @@ int option_handling(DltDaemonLocal *daemon_local, int argc, char *argv[])
         case 'a':
         {
             strncpy(daemon_local->flags.avalue, optarg, NAME_MAX);
+            break;
+        }
+#endif
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+        case 'l':
+        {
+            strncpy(daemon_local->flags.lvalue, optarg, NAME_MAX);
             break;
         }
 #endif
@@ -296,12 +331,16 @@ int option_handling(DltDaemonLocal *daemon_local, int argc, char *argv[])
             usage();
             return -2; /* return no error */
         }
+
         case '?':
         {
             if ((optopt == 'c') || (optopt == 't') || (optopt == 'p')
     #ifdef DLT_LOG_LEVEL_APP_CONFIG
                   || (optopt == 'a')
     #endif
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+                || (optopt == 'l')
+#endif
           )
                 fprintf (stderr, "Option -%c requires an argument.\n", optopt);
             else if (isprint (optopt))
@@ -1034,6 +1073,241 @@ int app_id_default_log_level_config_parser(DltDaemon *daemon,
 }
 #endif
 
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+static bool is_ascii_only(const char *str) {
+    while (*str) {
+        if ((unsigned char)*str > 127) {
+            return false;
+        }
+        str++;
+    }
+    return true;
+}
+
+/**
+ * Load configuration file parser
+ */
+int trace_load_config_file_parser(DltDaemon *daemon, DltDaemonLocal *daemon_local)
+{
+    FILE *pFile;
+    const int max_tokens = 4;
+    const int min_tokens = 3;
+    char tokens[max_tokens][value_length];
+    char line[value_length - 1];
+    char app_id_value[value_length];
+    char ctx_id_value[value_length];
+    char soft_limit_value[value_length];
+    char hard_limit_value[value_length];
+    int i;
+    uint32_t soft_limit;
+    uint32_t hard_limit;
+
+    char *pch;
+    const char *filename;
+
+    bool skipped;
+
+    if (daemon->preconfigured_trace_load_settings != NULL) {
+        free(daemon->preconfigured_trace_load_settings);
+        daemon->preconfigured_trace_load_settings = NULL;
+        daemon->preconfigured_trace_load_settings_count = 0;
+    }
+    daemon->preconfigured_trace_load_settings = malloc(sizeof(DltTraceLoadSettings));
+    if (daemon->preconfigured_trace_load_settings == NULL) {
+        dlt_log(LOG_CRIT, "Failed to allocate memory for trace load settings\n");
+        return DLT_RETURN_ERROR;
+    }
+
+    /* open configuration file */
+    filename = daemon_local->flags.lvalue[0]
+                   ? daemon_local->flags.lvalue
+                   : CONFIGURATION_FILES_DIR "/dlt-trace-load.conf";
+
+    pFile = fopen (filename, "r");
+    if (pFile == NULL) {
+        dlt_vlog(LOG_WARNING, "Cannot open trace load configuration file: %s\n",
+                 filename);
+        return -errno;
+    }
+
+    while (1) {
+        /* fetch line from configuration file */
+        if (fgets(line, value_length - 1, pFile) == NULL) {
+            break;
+        }
+
+        pch = strtok(line, " ");
+        app_id_value[0] = 0;
+        ctx_id_value[0] = 0;
+        soft_limit_value[0] = 0;
+        hard_limit_value[0] = 0;
+        soft_limit = 0U;
+        hard_limit = 0U;
+        memset(tokens, 0, sizeof(tokens));
+        i = 0;
+
+        skipped = false;
+        while (pch != NULL && i < max_tokens) {
+            /* ignore comments, empty lines and new lines */
+            if (strncmp(pch, "#", 1) == 0 || strncmp(pch, "\n", 1) == 0 ||
+                strncmp(pch, "\r", 1) == 0 || strncmp(pch, " ", 1) == 0) {
+                skipped = true;
+                break;
+            }
+            strncpy(tokens[i], pch, sizeof(tokens[i]) - 1);
+            pch = strtok(NULL, " ");
+            ++i;
+        }
+
+        if (skipped && i < min_tokens)
+            continue;
+
+        if (pch != NULL
+            && (pch[0] != '\n')
+            && (pch[0] != '\t')
+            && (pch[0] != ' ')
+            && (pch[0] != '#')) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid trace load settings: too many tokens in line '%s'\n", line);
+            continue;
+        }
+
+        bool has_ctx_id = i == max_tokens;
+        int soft_limit_idx = has_ctx_id ? 2 : 1;
+        int hard_limit_idx = has_ctx_id ? 3 : 2;
+
+        strncpy(app_id_value, tokens[0], sizeof(app_id_value) - 1);
+        if ((strlen(app_id_value) == 0)
+            || (strlen(app_id_value) > DLT_ID_SIZE)
+            || (!is_ascii_only(app_id_value))) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid apid for trace load settings: app id: '%s'\n", app_id_value);
+            continue;
+        }
+
+        if (has_ctx_id) {
+            strncpy(ctx_id_value, tokens[1], sizeof(ctx_id_value) - 1);
+            if ((strlen(ctx_id_value) == 0)
+                || (strlen(ctx_id_value) > DLT_ID_SIZE)
+                || (!is_ascii_only(ctx_id_value))) {
+                dlt_vlog(LOG_WARNING,
+                         "Invalid ctid for trace load settings: context id: '%s'\n", ctx_id_value);
+                continue;
+            }
+        }
+
+        if (strlen(tokens[soft_limit_idx]) == 0) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid soft_limit for trace load settings: app id: '%.4s', '%s'\n",
+                     app_id_value, tokens[soft_limit_idx]);
+            continue;
+        }
+
+        if (strlen(tokens[hard_limit_idx]) == 0) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid hard_limit for trace load settings: app id: '%.4s', '%s'\n",
+                     app_id_value, tokens[hard_limit_idx]);
+            continue;
+        }
+
+        strncpy(soft_limit_value, tokens[soft_limit_idx],
+                sizeof(soft_limit_value) - 1);
+        strncpy(hard_limit_value, tokens[hard_limit_idx],
+                sizeof(hard_limit_value) - 1);
+
+        errno = 0;
+        char *endptr;
+        endptr = NULL;
+        soft_limit = strtoul(soft_limit_value, &endptr, 10);
+        if ((errno != 0)
+            || ((soft_limit == 0) && (soft_limit_value[0] != '0'))
+            || (soft_limit_value[0] == '-')
+            || ((*endptr != '\n') && (*endptr != '\0'))) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid soft_limit for trace load settings: app id: '%.4s', soft_limit '%s'\n",
+                     app_id_value, soft_limit_value);
+            continue;
+        }
+
+        errno = 0;
+        endptr = NULL;
+        hard_limit = strtoul(hard_limit_value, &endptr, 10);
+        if ((errno != 0)
+            || ((hard_limit == 0) && (hard_limit_value[0] != '0'))
+            || (hard_limit_value[0] == '-')
+            || ((*endptr != '\n') && (*endptr != '\0'))) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid hard_limit for trace load settings: app id: '%.4s', hard_limit '%s'\n",
+                     app_id_value, hard_limit_value);
+            continue;
+        }
+
+        if (soft_limit > hard_limit) {
+            dlt_vlog(LOG_WARNING,
+                     "Invalid trace load settings: app id: '%.4s', soft limit %u is greater than hard limit %u\n",
+                     app_id_value, soft_limit, hard_limit);
+            continue;
+        }
+
+        DltTraceLoadSettings *settings = NULL;
+        int num_settings = 0;
+        DltReturnValue find_trace_settings_return_value = dlt_daemon_find_preconfigured_trace_load_settings(
+            daemon, app_id_value, ctx_id_value, &settings, &num_settings,
+            0);
+        if (find_trace_settings_return_value != DLT_RETURN_OK || num_settings != 0) {
+            dlt_vlog(LOG_WARNING,
+                     "App id '%.4s' is already configured, or an error occurred, skipping entry\n",
+                     app_id_value);
+            if (settings != NULL) {
+                free(settings);
+            }
+            continue;
+        }
+
+        /* allocate one more element in the trace load settings */
+        DltTraceLoadSettings *tmp =
+            realloc(daemon->preconfigured_trace_load_settings,
+                    (++daemon->preconfigured_trace_load_settings_count) *
+                        sizeof(DltTraceLoadSettings));
+
+        if (tmp == NULL) {
+            dlt_log(LOG_CRIT,
+                    "Failed to allocate memory for trace load settings\n");
+            return DLT_RETURN_ERROR;
+        }
+
+        daemon->preconfigured_trace_load_settings = tmp;
+        settings = &daemon->preconfigured_trace_load_settings
+                        [daemon->preconfigured_trace_load_settings_count - 1];
+        memset(settings, 0, sizeof(DltTraceLoadSettings));
+        settings->soft_limit = soft_limit;
+        settings->hard_limit = hard_limit;
+
+        memcpy(settings->apid, app_id_value, DLT_ID_SIZE);
+        if (has_ctx_id) {
+            memcpy(settings->ctid, ctx_id_value, DLT_ID_SIZE);
+            dlt_vlog(LOG_INFO,
+                     "Configured trace limits for app id '%.4s', ctx id '%.4s', soft limit: %u, hard_limit: %u\n",
+                     app_id_value, ctx_id_value, soft_limit, hard_limit);
+        } else {
+            dlt_vlog(LOG_INFO,
+                     "Configured trace limits for app id '%.4s', soft limit: %u, hard_limit: %u\n",
+                     app_id_value, soft_limit, hard_limit);
+        }
+
+
+
+    } /* while */
+    fclose(pFile);
+
+    // sort limits to improve search performance
+    qsort(daemon->preconfigured_trace_load_settings, daemon->preconfigured_trace_load_settings_count,
+          sizeof(DltTraceLoadSettings),
+          dlt_daemon_compare_trace_load_settings);
+    return 0;
+}
+#endif
+
 static int dlt_mkdir_recursive(const char *dir)
 {
     int ret = 0;
@@ -1122,7 +1396,9 @@ static DltReturnValue dlt_daemon_create_pipes_dir(char *dir)
     return ret;
 }
 #endif
-
+// This will be defined when unit testing, so functions
+// from this file can be tested without defining main twice
+#ifndef DLT_DAEMON_UNIT_TESTS_NO_MAIN
 /**
  * Main function of tool.
  */
@@ -1250,6 +1526,14 @@ int main(int argc, char *argv[])
     }
 #endif
 
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    /* Load control trace load configuration file without setting `back` to prevent exit if file is missing */
+    pthread_rwlock_init(&trace_load_rw_lock, NULL);
+    if (trace_load_config_file_parser(&daemon, &daemon_local) < 0) {
+        dlt_vlog(LOG_WARNING, "trace_load_config_file_parser() failed, using defaults for all app ids!\n");
+    }
+#endif
+
     /* --- Daemon init phase 2 end --- */
 
     if (daemon_local.flags.offlineLogstorageDirPath[0])
@@ -1265,14 +1549,25 @@ int main(int argc, char *argv[])
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
     {
         char *watchdogUSec = getenv("WATCHDOG_USEC");
-        int watchdogTimeoutSeconds = 0;
+        // set a sensible default, in case the environment variable is not set
+        int watchdogTimeoutSeconds = 30;
 
         dlt_log(LOG_DEBUG, "Systemd watchdog initialization\n");
 
-        if (watchdogUSec)
+        if (watchdogUSec) {
+            // WATCHDOG_USEC is the timeout in micrsoseconds
+            // divide this by 2*10^6 to get the interval in seconds
+            // 2 * because we notify systemd after half the timeout
             watchdogTimeoutSeconds = atoi(watchdogUSec) / 2000000;
+        }
+
+        if (watchdogTimeoutSeconds == 0) {
+            dlt_log(LOG_WARNING, "Watchdog timeout is too small, need at least 1s, setting 30s timeout\n");
+            watchdogTimeoutSeconds = 30;
+        }
 
         daemon.watchdog_trigger_interval = watchdogTimeoutSeconds;
+        daemon.watchdog_last_trigger_time = 0U;
         create_timer_fd(&daemon_local,
                         watchdogTimeoutSeconds,
                         watchdogTimeoutSeconds,
@@ -1325,9 +1620,9 @@ int main(int argc, char *argv[])
                                   daemon_local.flags.vflag) == 0))
         daemon.runtime_context_cfg_loaded = 1;
 
-    dlt_daemon_log_internal(&daemon,
-                            &daemon_local,
+    dlt_daemon_log_internal(&daemon, &daemon_local,
                             "Daemon launched. Starting to output traces...",
+                            DLT_LOG_INFO, DLT_DAEMON_APP_ID, DLT_DAEMON_CTX_ID,
                             daemon_local.flags.vflag);
 
     /* Even handling loop. */
@@ -1338,7 +1633,8 @@ int main(int argc, char *argv[])
 
     snprintf(local_str, DLT_DAEMON_TEXTBUFSIZE, "Exiting DLT daemon... [%d]",
              g_signo);
-    dlt_daemon_log_internal(&daemon, &daemon_local, local_str,
+    dlt_daemon_log_internal(&daemon, &daemon_local, local_str, DLT_LOG_INFO,
+                            DLT_DAEMON_APP_ID, DLT_DAEMON_CTX_ID,
                             daemon_local.flags.vflag);
     dlt_vlog(LOG_NOTICE, "%s%s", local_str, "\n");
 
@@ -1359,6 +1655,7 @@ int main(int argc, char *argv[])
     return 0;
 
 } /* main() */
+#endif
 
 int dlt_daemon_local_init_p1(DltDaemon *daemon, DltDaemonLocal *daemon_local, int verbose)
 {
@@ -1935,7 +2232,7 @@ static char* file_read_everything(FILE* const file, const size_t sizeLimit)
 
     /* Size limit includes NULL terminator. */
     const off_t size = s_buf.st_size;
-    if (size < 0 || size >= sizeLimit) {
+    if (size < 0 || (size_t)size >= sizeLimit) {
         dlt_log(LOG_WARNING, "file size invalid\n");
         fclose(file);
         return NULL;
@@ -1984,7 +2281,7 @@ static char* file_read_field(FILE* const file, const char* const fieldName)
     char* result = NULL;
 
     char* buffer = NULL;
-    ssize_t bufferSize = 0;
+    size_t bufferSize = 0;
 
     while (true) {
         ssize_t lineSize = getline(&buffer, &bufferSize, file);
@@ -2002,10 +2299,9 @@ static char* file_read_field(FILE* const file, const char* const fieldName)
         }
 
         /* check fieldName */
-        if (   strncmp(line, fieldName, fieldNameLen) == 0
-            && lineSize >= (fieldNameLen + 1)
-            && strchr(kDelimiters, line[fieldNameLen]) != NULL
-           ) {
+        if (strncmp(line, fieldName, fieldNameLen) == 0 &&
+            (size_t)lineSize >= (fieldNameLen + 1) &&
+            strchr(kDelimiters, line[fieldNameLen]) != NULL) {
             /* trim fieldName */
             line += fieldNameLen;
 
@@ -2260,7 +2556,9 @@ void dlt_daemon_daemonize(int verbose)
  * would cause an endless loop because dlt_daemon_log_internal() would itself again try
  * to open the offline trace file.
  * This is a dlt-daemon only function. The libdlt has no equivalent function available. */
-int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local, char *str, int verbose)
+int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local,
+                            char *str, DltLogLevelType level,
+                            const char *app_id, const char *ctx_id, int verbose)
 {
     DltMessage msg = { 0 };
     static uint8_t uiMsgCount = 0;
@@ -2297,10 +2595,10 @@ int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local, cha
         (DltExtendedHeader *)(msg.headerbuffer + sizeof(DltStorageHeader) + sizeof(DltStandardHeader) +
                               DLT_STANDARD_HEADER_EXTRA_SIZE(msg.standardheader->htyp));
     msg.extendedheader->msin = DLT_MSIN_VERB | (DLT_TYPE_LOG << DLT_MSIN_MSTP_SHIFT) |
-        ((DLT_LOG_INFO << DLT_MSIN_MTIN_SHIFT) & DLT_MSIN_MTIN);
+        ((level << DLT_MSIN_MTIN_SHIFT) & DLT_MSIN_MTIN);
     msg.extendedheader->noar = 1;
-    dlt_set_id(msg.extendedheader->apid, "DLTD");
-    dlt_set_id(msg.extendedheader->ctid, "INTM");
+    dlt_set_id(msg.extendedheader->apid, app_id);
+    dlt_set_id(msg.extendedheader->ctid, ctx_id);
 
     /* Set payload data... */
     uiType = DLT_TYPE_INFO_STRG;
@@ -2438,7 +2736,8 @@ int dlt_daemon_process_client_connect(DltDaemon *daemon,
              "New client connection #%d established, Total Clients : %d",
              in_sock, daemon_local->client_connections);
 
-    dlt_daemon_log_internal(daemon, daemon_local, local_str,
+    dlt_daemon_log_internal(daemon, daemon_local, local_str, DLT_LOG_INFO,
+                            DLT_DAEMON_APP_ID, DLT_DAEMON_CTX_ID,
                             daemon_local->flags.vflag);
     dlt_vlog(LOG_DEBUG, "%s%s", local_str, "\n");
 
@@ -2458,6 +2757,11 @@ int dlt_daemon_process_client_connect(DltDaemon *daemon,
         /* send new log state to all applications */
         daemon->connectionState = 1;
         dlt_daemon_user_send_all_log_state(daemon, verbose);
+
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+        /* Reset number of received bytes from FIFO */
+        daemon->bytes_recv = 0;
+#endif
     }
 
     return 0;
@@ -2849,8 +3153,27 @@ int dlt_daemon_process_user_messages(DltDaemon *daemon,
         return -1;
     }
 
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    /* Count up number of received bytes from FIFO */
+    if (receiver->bytesRcvd > receiver->lastBytesRcvd)
+    {
+        daemon->bytes_recv += receiver->bytesRcvd - receiver->lastBytesRcvd;
+    }
+#endif
+
     /* look through buffer as long as data is in there */
     while ((receiver->bytesRcvd >= min_size) && run_loop) {
+#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
+        /* this loop may be running long, so we have to exit it at some point to be able to
+         * to process other events, like feeding the watchdog
+         */
+        bool watchdog_triggered= dlt_daemon_trigger_systemd_watchdog_if_necessary(daemon);
+        if (watchdog_triggered) {
+            dlt_vlog(LOG_WARNING, "%s yields due to watchdog.\n", __func__);
+            run_loop = 0; // exit loop in next iteration
+        }
+#endif
+
         dlt_daemon_process_user_message_func func = NULL;
 
         offset = 0;
@@ -3065,12 +3388,17 @@ int dlt_daemon_process_user_message_register_application(DltDaemon *daemon,
                  application->apid,
                  application->pid,
                  application->application_description);
-        dlt_daemon_log_internal(daemon,
-                                daemon_local,
-                                local_str,
+        dlt_daemon_log_internal(daemon, daemon_local, local_str, DLT_LOG_INFO,
+                                DLT_DAEMON_APP_ID, DLT_DAEMON_CTX_ID,
                                 daemon_local->flags.vflag);
         dlt_vlog(LOG_DEBUG, "%s%s", local_str, "\n");
     }
+
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    if (dlt_daemon_user_send_trace_load_config(daemon, application, verbose) != DLT_RETURN_OK)
+        dlt_vlog(LOG_WARNING, "Cannot send trace config to Apid: %.4s, PID: %d\n",
+                 application->apid, application->pid);
+#endif
 
     return 0;
 }
@@ -3214,7 +3542,9 @@ int dlt_daemon_process_user_message_register_context(DltDaemon *daemon,
                  context->context_description);
 
         if (verbose)
-            dlt_daemon_log_internal(daemon, daemon_local, local_str, verbose);
+            dlt_daemon_log_internal(daemon, daemon_local, local_str,
+                                    DLT_LOG_INFO, DLT_DAEMON_APP_ID,
+                                    DLT_DAEMON_CTX_ID, verbose);
 
         dlt_vlog(LOG_DEBUG, "%s%s", local_str, "\n");
     }
@@ -3369,10 +3699,9 @@ int dlt_daemon_process_user_message_unregister_application(DltDaemon *daemon,
                          DLT_DAEMON_TEXTBUFSIZE,
                          "Unregistered ApID '%.4s'",
                          userapp.apid);
-                dlt_daemon_log_internal(daemon,
-                                        daemon_local,
-                                        local_str,
-                                        verbose);
+                dlt_daemon_log_internal(daemon, daemon_local, local_str,
+                                        DLT_LOG_INFO, DLT_DAEMON_APP_ID,
+                                        DLT_DAEMON_CTX_ID, verbose);
                 dlt_vlog(LOG_DEBUG, "%s%s", local_str, "\n");
             }
         }
@@ -3437,10 +3766,9 @@ int dlt_daemon_process_user_message_unregister_context(DltDaemon *daemon,
                      userctxt.apid);
 
             if (verbose)
-                dlt_daemon_log_internal(daemon,
-                                        daemon_local,
-                                        local_str,
-                                        verbose);
+                dlt_daemon_log_internal(daemon, daemon_local, local_str,
+                                        DLT_LOG_INFO, DLT_DAEMON_APP_ID,
+                                        DLT_DAEMON_CTX_ID, verbose);
 
             dlt_vlog(LOG_DEBUG, "%s%s", local_str, "\n");
         }
@@ -3486,18 +3814,11 @@ int dlt_daemon_process_user_message_log(DltDaemon *daemon,
         /* Not enough bytes received to remove*/
         return DLT_DAEMON_ERROR_UNKNOWN;
 
-#ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-    const unsigned int start_time = dlt_uptime();
-#endif
-
     while (1) {
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-        const unsigned int uptime = dlt_uptime();
-        if ((uptime - start_time) / 10000 > daemon->watchdog_trigger_interval) {
-            dlt_vlog(LOG_WARNING,
-                     "spent already 1 watchdog trigger interval in %s, yielding to process other events.\n", __func__);
-            if (sd_notify(0, "WATCHDOG=1") < 0)
-                dlt_vlog(LOG_CRIT, "Could not reset systemd watchdog from %s\n", __func__);
+        bool watchdog_triggered = dlt_daemon_trigger_systemd_watchdog_if_necessary(daemon);
+        if (watchdog_triggered) {
+            dlt_vlog(LOG_WARNING, "%s yields due to watchdog.\n", __func__);
             break;
         }
 #endif
@@ -3519,7 +3840,7 @@ int dlt_daemon_process_user_message_log(DltDaemon *daemon,
             return DLT_DAEMON_ERROR_UNKNOWN;
         }
 
-#ifdef DLT_LOG_LEVEL_APP_CONFIG
+#if defined(DLT_LOG_LEVEL_APP_CONFIG) || defined(DLT_TRACE_LOAD_CTRL_ENABLE)
         DltDaemonApplication *app = dlt_daemon_application_find(
             daemon, daemon_local->msg.extendedheader->apid, daemon->ecuid, verbose);
 #endif
@@ -3531,6 +3852,11 @@ int dlt_daemon_process_user_message_log(DltDaemon *daemon,
             , app
 #endif
         );
+
+        // check trace_load
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+        keep_message &= trace_load_keep_message(app, size, daemon, daemon_local, verbose);
+#endif
 
         if (keep_message)
           dlt_daemon_client_send_message_to_all_client(daemon, daemon_local, verbose);
@@ -3557,21 +3883,10 @@ int dlt_daemon_process_user_message_log(DltDaemon *daemon,
              * or the headers are corrupted (error case). */
             dlt_log(LOG_DEBUG, "Can't read messages from receiver\n");
 
-        if (dlt_receiver_remove(rec, rec->bytesRcvd) != DLT_RETURN_OK) {
-            /* In certain rare scenarios where only a partial message has been received
-             * (Eg: kernel IPC buffer memory being full), we want to discard the message
-             * and not broadcast it forward to connected clients. Since the DLT library
-             * checks return value of the writev() call against the sent total message
-             * length, the partial message will be buffered and retransmitted again.
-             * This implicitly ensures that no message loss occurs.
-             */
-            dlt_log(LOG_WARNING, "failed to remove required bytes from receiver.\n");
-        }
-
         return DLT_DAEMON_ERROR_UNKNOWN;
     }
 
-#ifdef DLT_LOG_LEVEL_APP_CONFIG
+#if defined(DLT_LOG_LEVEL_APP_CONFIG) || defined(DLT_TRACE_LOAD_CTRL_ENABLE)
     DltDaemonApplication *app = dlt_daemon_application_find(
         daemon, daemon_local->msg.extendedheader->apid, daemon->ecuid, verbose);
 #endif
@@ -3583,6 +3898,12 @@ int dlt_daemon_process_user_message_log(DltDaemon *daemon,
         , app
 #endif
     );
+
+    // check trace_load
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    keep_message &=
+        trace_load_keep_message(app, size, daemon, daemon_local, verbose);
+#endif
 
     if (keep_message)
       dlt_daemon_client_send_message_to_all_client(daemon, daemon_local, verbose);
@@ -3616,6 +3937,12 @@ bool enforce_context_ll_and_ts_keep_message(DltDaemonLocal *daemon_local
         return true;
     }
 
+#ifdef DLT_LOG_LEVEL_APP_CONFIG
+    if (app == NULL) {
+        return true;
+    }
+#endif
+
     const int mtin = DLT_GET_MSIN_MTIN(daemon_local->msg.extendedheader->msin);
 #ifdef DLT_LOG_LEVEL_APP_CONFIG
     if (app->num_context_log_level_settings > 0) {
@@ -3629,6 +3956,53 @@ bool enforce_context_ll_and_ts_keep_message(DltDaemonLocal *daemon_local
 #endif
     return mtin <= daemon_local->flags.contextLogLevel;
 }
+
+
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+bool trace_load_keep_message(DltDaemonApplication *app,
+                             const int size, DltDaemon *const daemon,
+                             DltDaemonLocal *const daemon_local,
+                             int verbose)
+{
+    bool keep_message = true;
+    if (app == NULL || !daemon_local->msg.extendedheader) {
+        return keep_message;
+    }
+
+    DltMessage* msg = &daemon_local->msg;
+    const int mtin = DLT_GET_MSIN_MTIN(msg->extendedheader->msin);
+
+    struct DltTraceLoadLogParams params = {
+        daemon,
+        daemon_local,
+        verbose,
+        app->apid,
+    };
+
+    DltTraceLoadSettings *trace_load_settings =
+        dlt_find_runtime_trace_load_settings(
+            app->trace_load_settings, app->trace_load_settings_count,
+            app->apid, msg->extendedheader->ctid);
+
+    if (trace_load_settings != NULL) {
+        pthread_rwlock_wrlock(&trace_load_rw_lock);
+        keep_message = dlt_check_trace_load(
+            trace_load_settings, mtin, msg->headerextra.tmsp, size,
+            dlt_daemon_output_internal_msg, (void *)(&params));
+        pthread_rwlock_unlock(&trace_load_rw_lock);
+    }
+    else {
+        dlt_vlog(
+            LOG_ERR,
+            "Failed to lookup trace load limits for %s, "
+            "dropping message, likely app was not registered properly\n",
+            app->apid);
+        keep_message = false;
+    }
+
+    return keep_message;
+}
+#endif
 
 int dlt_daemon_process_user_message_set_app_ll_ts(DltDaemon *daemon,
                                                   DltDaemonLocal *daemon_local,
@@ -3792,7 +4166,7 @@ int dlt_daemon_send_ringbuffer_to_client(DltDaemon *daemon, DltDaemonLocal *daem
 
     while ((length = dlt_buffer_copy(&(daemon->client_ringbuffer), data, sizeof(data))) > 0) {
 #ifdef DLT_SYSTEMD_WATCHDOG_ENABLE
-        dlt_daemon_trigger_systemd_watchdog_if_necessary(&curr_time, daemon->watchdog_trigger_interval);
+        dlt_daemon_trigger_systemd_watchdog_if_necessary(daemon);
 #endif
 
         if ((ret =
@@ -3989,11 +4363,25 @@ int dlt_daemon_close_socket(int sock, DltDaemon *daemon, DltDaemonLocal *daemon_
              "Client connection #%d closed. Total Clients : %d",
              sock,
              daemon_local->client_connections);
-    dlt_daemon_log_internal(daemon, daemon_local, local_str, daemon_local->flags.vflag);
+    dlt_daemon_log_internal(daemon, daemon_local, local_str, DLT_LOG_INFO,
+                            DLT_DAEMON_APP_ID, DLT_DAEMON_CTX_ID,
+                            daemon_local->flags.vflag);
     dlt_vlog(LOG_DEBUG, "%s%s", local_str, "\n");
 
     return 0;
 }
+
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+
+static DltReturnValue dlt_daemon_output_internal_msg(
+    const DltLogLevelType loglevel, const char *const text, void* const params) {
+    struct DltTraceLoadLogParams* log_params = (struct DltTraceLoadLogParams*)params;
+    return dlt_daemon_log_internal(
+        log_params->daemon, log_params->daemon_local, (char *)text, loglevel,
+        log_params->app_id, DLT_TRACE_LOAD_CONTEXT_ID, log_params->verbose);
+}
+#endif
+
 
 /**
  \}
