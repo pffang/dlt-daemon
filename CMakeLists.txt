@@ -14,11 +14,7 @@
 #######
 
 # Set minimum Cmake version and setup policy behavior
-cmake_minimum_required(VERSION 3.3)
-
-if(${CMAKE_VERSION} VERSION_GREATER "3.20" OR ${CMAKE_VERSION} VERSION_EQUAL "3.20")
-    cmake_policy(SET CMP0115 OLD)
-endif()
+cmake_minimum_required(VERSION 3.13...4.0)
 project(automotive-dlt VERSION 2.18.10)
 
 
@@ -83,6 +79,7 @@ option(WITH_DLT_EXAMPLES "Set to ON to build src/examples binaries"             
 option(WITH_DLT_FILETRANSFER "Set to ON to build dlt-system with filetransfer support"                               OFF)
 option(WITH_DLT_SYSTEM "Set to ON to build src/system binaries"                                                      OFF)
 option(WITH_DLT_DBUS "Set to ON to build src/dbus binaries"                                                          OFF)
+option(WITH_DLT_DEBUGGERS "Set to ON to enable debug symbols, AddressSanitizer, and Valgrind support"                OFF)
 option(WITH_DLT_TESTS "Set to ON to build src/test binaries"                                                         ON)
 option(WITH_DLT_UNIT_TESTS "Set to ON to build gtest framework and tests/binaries"                                   OFF)
 cmake_dependent_option(WITH_DLT_INSTALLED_TESTS "Set to ON to install tests/binaries"                                OFF WITH_DLT_UNIT_TESTS OFF)
@@ -94,7 +91,6 @@ option(WITH_DLT_FILE_LOGGING_SYSLOG_FALLBACK "Set to ON to enable fallback to sy
 option(WITH_DLT_NETWORK_TRACE "Set to ON to enable network trace (if message queue is supported)"                    ON)
 option(WITH_DLT_LOG_LEVEL_APP_CONFIG "Set to ON to enable default log levels based on application ids"               OFF)
 option(WITH_DLT_TRACE_LOAD_CTRL "Set to ON to enable trace load control in libdlt and dlt-daemon"                    OFF)
-
 
 set(DLT_IPC "FIFO"
     CACHE STRING "UNIX_SOCKET,FIFO")
@@ -135,10 +131,8 @@ set(LICENSE "Mozilla Public License Version 2.0")
 find_package(Threads REQUIRED)
 if(WITH_DLT_LOGSTORAGE_GZIP)
     find_package(ZLIB 1.2.9 REQUIRED)
-    set(ZLIB_LIBRARY "ZLIB::ZLIB")
 elseif(WITH_DLT_COREDUMPHANDLER OR WITH_DLT_FILETRANSFER)
     find_package(ZLIB REQUIRED)
-    set(ZLIB_LIBRARY "ZLIB::ZLIB")
 else()
     set(ZLIB_LIBRARY "")
 endif()
@@ -161,6 +155,20 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/src/gateway
     ${PROJECT_SOURCE_DIR}/systemd/3rdparty
 )
+
+if(WITH_DLT_DEBUGGERS)
+    message(STATUS "WITH_DLT_DEBUGGERS is ON: Enabling -g3, -O0, AddressSanitizer, and Valgrind compatibility.")
+    if (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g3 -O0 -fsanitize=address")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -O0 -fsanitize=address")
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+    endif()
+    set(ENV{ASAN_OPTIONS} "detect_leaks=1")
+    message(STATUS "AddressSanitizer enabled: run your binaries normally.")
+    message(STATUS "If a memory error occurs, AddressSanitizer will print a detailed error report to the terminal, including the type of bug, stack trace, and location.")
+    message(STATUS "Leak detection is enabled by default (ASAN_OPTIONS=detect_leaks=1). See https://clang.llvm.org/docs/AddressSanitizer.html for more info.")
+    message(STATUS "You can also run the binaries with Valgrind: valgrind ./your_binary")
+endif()
 
 add_definitions(-D_GNU_SOURCE)
 add_definitions(-DDLT_WRITEV_TIMEOUT_MS=${DLT_WRITEV_TIMEOUT_MS})
@@ -238,13 +246,21 @@ if(WITH_DLT_COVERAGE)
 endif()
 
 add_compile_options(
-    $<$<COMPILE_LANGUAGE:C>:-std=gnu99>
+    $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
     $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++14>
     -Wall
     -Wextra
-    # -pedantic
+    -pedantic
     -Wno-variadic-macros
     -Wno-strict-aliasing
+    -Werror
+    -Wconversion
+    -Wshadow
+    -Wundef
+    -Wcast-qual
+    -Wno-system-headers
+    -Wno-unused-function
+    -Wno-stringop-truncation
 )
 
 if(WITH_DOC STREQUAL "OFF")
@@ -298,7 +314,11 @@ if(WITH_SYSTEMD
 
     find_package(PkgConfig REQUIRED)
     execute_process(COMMAND pkg-config --modversion systemd OUTPUT_VARIABLE SYSTEMD_VERSION)
-    string(REPLACE "\n" "" SYSTEMD_VERSION ${SYSTEMD_VERSION})
+    if(SYSTEMD_VERSION)
+        string(REPLACE "\n" "" SYSTEMD_VERSION ${SYSTEMD_VERSION})
+    else()
+        set(SYSTEMD_VERSION "")
+    endif()
 
     if(WITH_SYSTEMD)
         add_definitions(-DDLT_SYSTEMD_ENABLE)

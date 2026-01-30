@@ -109,27 +109,6 @@ extern "C" {
 
 #   define DLT_USER_RESENDBUF_MAX_SIZE (DLT_USER_BUF_MAX_SIZE + 100)    /**< Size of resend buffer; Max DLT message size is 1390 bytes plus some extra header space  */
 
-/* Use a semaphore or mutex from your OS to prevent concurrent access to the DLT buffer. */
-#define DLT_SEM_LOCK() do{ \
-        int err_check = pthread_mutex_lock(&dlt_mutex); \
-        if (err_check != 0) { \
-            dlt_vlog(LOG_ERR, \
-                     "DLT sem lock error: %d - %s pid=%i\n", \
-                     err_check, \
-                     strerror(err_check), \
-                     getpid()); \
-    }} while(false)
-
-#define DLT_SEM_FREE() do{ \
-        int err_check = pthread_mutex_unlock(&dlt_mutex); \
-        if (err_check != 0) { \
-            dlt_vlog(LOG_ERR, \
-                    "DLT sem free error: %d - %s in pid=%i\n", \
-                    err_check, \
-                    strerror(err_check), \
-                    getpid()); \
-    }} while(false)
-
 /**
  * This structure is used for every context used in an application.
  */
@@ -192,6 +171,9 @@ typedef struct
     /* Log Level changed callback */
     void (*log_level_changed_callback)(char context_id[DLT_ID_SIZE], uint8_t log_level, uint8_t trace_status);
 
+#ifdef DLT_TRACE_LOAD_CTRL_ENABLE
+    DltTraceLoadSettings *trace_load_settings;    /**< trace load setting for the context */
+#endif
 } dlt_ll_ts_type;
 
 /**
@@ -288,6 +270,11 @@ typedef struct
 
 typedef int (*dlt_injection_callback_id)(uint32_t, void *, uint32_t, void *);
 typedef int (*dlt_injection_callback)(uint32_t, void *, uint32_t);
+
+typedef union {
+    int (*with_id)(uint32_t, void *, uint32_t, void *);
+    int (*without_id)(uint32_t, void *, uint32_t);
+} dlt_injection_callback_internal;
 
 /**************************************************************************************************
 * The following API functions define a low level function interface for DLT
@@ -869,7 +856,7 @@ DltReturnValue dlt_user_trace_network_segmented(DltContext *handle,
  * This function has to be called first, before using any DLT user lib functions.
  * @return Value from DltReturnValue enum
  */
-DltReturnValue dlt_init();
+DltReturnValue dlt_init(void);
 
 /**
  * Initialize the user lib writing only to file.
@@ -892,7 +879,7 @@ DltReturnValue dlt_set_filesize_max(unsigned int filesize);
  * This function has to be called when finishing using the DLT user lib.
  * @return Value from DltReturnValue enum
  */
-DltReturnValue dlt_free();
+DltReturnValue dlt_free(void);
 
 /**
  * Check the library version of DLT library.
@@ -1007,7 +994,7 @@ DltReturnValue dlt_set_log_mode(DltUserLogMode mode);
  * Until then the state is "unknown state".
  * @return -1 = unknown state, 0 = client not connected, 1 = client connected
  */
-int dlt_get_log_state();
+int dlt_get_log_state(void);
 
 /**
  * Register callback function called when injection message was received
@@ -1225,7 +1212,7 @@ DltReturnValue dlt_log_raw(DltContext *handle, DltLogLevelType loglevel, void *d
  * Write marker message to DLT.
  * @return Value from DltReturnValue enum
  */
-DltReturnValue dlt_log_marker();
+DltReturnValue dlt_log_marker(void);
 
 /**
  * Get the total size and available size of the shared memory buffer between daemon and applications.
@@ -1259,19 +1246,8 @@ DltReturnValue dlt_user_log_resend_buffer(void);
  * @param loglevel this is the current log level of the log message to be sent
  * @return Value from DltReturnValue enum, DLT_RETURN_TRUE if log level is enabled
  */
-static inline DltReturnValue dlt_user_is_logLevel_enabled(DltContext *handle, DltLogLevelType loglevel)
-{
-    if ((loglevel < DLT_LOG_DEFAULT) || (loglevel >= DLT_LOG_MAX))
-        return DLT_RETURN_WRONG_PARAMETER;
+DltReturnValue dlt_user_is_logLevel_enabled(DltContext *handle, DltLogLevelType loglevel);
 
-    if ((handle == NULL) || (handle->log_level_ptr == NULL))
-        return DLT_RETURN_WRONG_PARAMETER;
-
-    if ((loglevel <= (DltLogLevelType)(*(handle->log_level_ptr))) && (loglevel != DLT_LOG_OFF))
-        return DLT_RETURN_TRUE;
-
-    return DLT_RETURN_LOGGING_DISABLED;
-}
 
 #   ifdef DLT_TEST_ENABLE
 void dlt_user_test_corrupt_user_header(int enable);

@@ -7,11 +7,11 @@
 # DESCRIPTION
 
 The DLT system logging process is the central application, which logs system information from the platform. It provides the features
-filetransfer, syslog adapater, logging of any kind of files and
+filetransfer, syslog adapter, logging of any kind of files and
 procfilesystem logger. The individual features can be enabled and
 disabled in the configuration file.
 
-The configuration file dlt-system.conf allows to configure the different runtime behaviour of dlt-system. The configuration file is loaded during startup of dlt-system.
+The configuration file dlt-system.conf allows one to configure the different runtime behaviour of dlt-system. The configuration file is loaded during startup of dlt-system.
 
 dlt-system loads by default the configuration file  /etc/dlt-system.conf.
 An alternative configuration file can be loaded with the option -c.
@@ -95,13 +95,13 @@ Map journal log levels to DLT log levels.
 
 ## JournalUseOriginalTimestamp
 
-Use the original timestamp (uptime when the event actually occured) as DLT timestamp.
+Use the original timestamp (uptime when the event actually occurred) as DLT timestamp.
 
     Default: 1
 
 ## JournalUseUptimeOnly
 
-Ignore the timestamp, show uptime (when the event actually occured) only in payload.
+Ignore the timestamp, show uptime (when the event actually occurred) only in payload.
 
     Default: 0
 
@@ -121,7 +121,7 @@ The Context Id of the filetransfer.
 
 ## FiletransferTimeStartup
 
-Time in seconds after startup of dlt-system when first file is transfered.
+Time in seconds after startup of dlt-system when first file is transferred.
 
     Default: 0
 

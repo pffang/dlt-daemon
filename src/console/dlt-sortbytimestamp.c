@@ -121,9 +121,9 @@ void verbose(int level, char *msg, ...) {
  */
 int compare_index_timestamps(const void *a, const void *b) {
     int ret = -1;
-    if (((TimestampIndex *)a)->tmsp > ((TimestampIndex *)b)->tmsp)
+    if (((const TimestampIndex *)a)->tmsp > ((const TimestampIndex *)b)->tmsp)
         ret = 1;
-    else if (((TimestampIndex *)a)->tmsp == ((TimestampIndex *)b)->tmsp)
+    else if (((const TimestampIndex *)a)->tmsp == ((const TimestampIndex *)b)->tmsp)
         ret = 0;
 
     return ret;
@@ -135,9 +135,9 @@ int compare_index_timestamps(const void *a, const void *b) {
  */
 int compare_index_systime(const void *a, const void *b) {
     int ret = -1;
-    if(((TimestampIndex *) a)->systmsp > ((TimestampIndex *) b)->systmsp)
+    if(((const TimestampIndex *) a)->systmsp > ((const TimestampIndex *) b)->systmsp)
         ret = 1;
-    else if(((TimestampIndex *) a)->systmsp == ((TimestampIndex *) b)->systmsp)
+    else if(((const TimestampIndex *) a)->systmsp == ((const TimestampIndex *) b)->systmsp)
         ret = 0;
 
     return ret;
@@ -160,36 +160,36 @@ void write_messages(int ohandle, DltFile *file,
         if ((0 == i % 1001) || (i == message_count - 1))
             verbose(2, "Writing message %d\r", i);
 
-        if (timestamps != NULL) {
-            if (dlt_file_message(file, timestamps[i].num, 0) == DLT_RETURN_OK) {
-                iov[0].iov_base = file->msg.headerbuffer;
-                iov[0].iov_len = file->msg.headersize;
-                iov[1].iov_base = file->msg.databuffer;
-                iov[1].iov_len = file->msg.datasize;
-
-                bytes_written = writev(ohandle, iov, 2);
-                last_errno = errno;
-
-                if (0 > bytes_written) {
-                    printf("%s: returned an error [%s]!\n",
-                            __func__,
-                            strerror(last_errno));
-                    if (ohandle > 0) {
-                        close(ohandle);
-                        ohandle = -1;
-                    }
-                    free(timestamps);
-                    timestamps = NULL;
-
-                    dlt_file_free(file, 0);
-                    exit (-1);
-                }
-            }
+        if (timestamps == NULL) {
+            continue;
         }
-    }
+        if (dlt_file_message(file, timestamps[i].num, 0) < DLT_RETURN_OK)
+            continue;
+        iov[0].iov_base = file->msg.headerbuffer;
+        iov[0].iov_len = (size_t)file->msg.headersize;
+        iov[1].iov_base = file->msg.databuffer;
+        iov[1].iov_len = (size_t)file->msg.datasize;
 
+        bytes_written = writev(ohandle, iov, 2);
+        last_errno = errno;
+
+        if (0 > bytes_written) {
+            printf("%s: returned an error [%s]!\n",
+                    __func__,
+                    strerror(last_errno));
+            if (ohandle > 0) {
+                close(ohandle);
+                ohandle = -1;
+            }
+            free(timestamps);
+            timestamps = NULL;
+        }
+        dlt_file_free(file, 0);
+        exit (-1);
+    }
     verbose (2, "\n");
 }
+
 
 /**
  * Print usage information of tool.
@@ -403,24 +403,26 @@ int main(int argc, char *argv[]) {
     verbose(1, "Filling %d entries\n", message_count);
 
     for (num = begin; num <= end; num++) {
+        int curr_idx = num - begin;
         if (dlt_file_message(&file, num, vflag) < DLT_RETURN_OK)
             continue;
-        timestamp_index[num - begin].num = num;
-        timestamp_index[num - begin].systmsp = file.msg.storageheader->seconds;
-        timestamp_index[num - begin].tmsp = file.msg.headerextra.tmsp;
+        timestamp_index[curr_idx].num = num;
+        timestamp_index[curr_idx].systmsp = file.msg.storageheader->seconds;
+        timestamp_index[curr_idx].tmsp = file.msg.headerextra.tmsp;
     }
 
     /* This step is extending the array one more element by copying the first element */
-    timestamp_index[num].num = timestamp_index[0].num;
-    timestamp_index[num].systmsp = timestamp_index[0].systmsp;
-    timestamp_index[num].tmsp = timestamp_index[0].tmsp;
+    timestamp_index[message_count + 1].num = timestamp_index[0].num;
+    timestamp_index[message_count + 1].systmsp = timestamp_index[0].systmsp;
+    timestamp_index[message_count + 1].tmsp = timestamp_index[0].tmsp;
 
     verbose(1, "Sorting\n");
     qsort((void *) timestamp_index, message_count, sizeof(TimestampIndex), compare_index_systime);
 
     for (num = begin; num <= end; num++) {
-        delta_tmsp = (uint32_t)llabs((int64_t)timestamp_index[num + 1].tmsp - timestamp_index[num].tmsp);
-        delta_systime = (uint32_t)llabs((int64_t)timestamp_index[num + 1].systmsp - timestamp_index[num].systmsp);
+        int curr_idx = num - begin;
+        delta_tmsp = (uint32_t)llabs((int64_t)timestamp_index[curr_idx + 1].tmsp - timestamp_index[curr_idx].tmsp);
+        delta_systime = (uint32_t)llabs((int64_t)timestamp_index[curr_idx + 1].systmsp - timestamp_index[curr_idx].systmsp);
 
         /*
          * Here is a try to detect a new cycle of boot in system.
