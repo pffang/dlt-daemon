@@ -70,6 +70,8 @@
 #   include <winbase.h>
 #endif
 
+#define DLT_UNUSED(x) (void)(x)
+
 const char dltSerialHeader[DLT_ID_SIZE] = { 'D', 'L', 'S', 1 };
 char dltSerialHeaderChar[DLT_ID_SIZE] = { 'D', 'L', 'S', 1 };
 
@@ -3024,6 +3026,7 @@ speed_t dlt_convert_serial_speed(int baudrate)
 
     return ret;
 #   else
+    DLT_UNUSED(baudrate);
     return 0;
 #   endif
 }
