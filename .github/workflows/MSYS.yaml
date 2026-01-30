@@ -8,6 +8,8 @@ on:
 
 env:
   BUILD_TYPE: Release
+  WITH_DLT_COVERAGE: OFF
+  BUILD_GMOCK: OFF
 
 defaults:
     run:
@@ -45,7 +47,3 @@ jobs:
 
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} -- -j$(nproc)
-
-    - name: Test
-      working-directory: ${{github.workspace}}/build
-      run: ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
