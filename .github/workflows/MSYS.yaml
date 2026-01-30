@@ -42,7 +42,8 @@ jobs:
       run: |
           cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
                                                -DWITH_DLT_COVERAGE=${{env.WITH_DLT_COVERAGE}} \
-                                               -DBUILD_GMOCK=${{env.BUILD_GMOCK}}
+                                               -DBUILD_GMOCK=${{env.BUILD_GMOCK}} \
+                                               -G "Ninja"
 
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} -- -j$(nproc)
