@@ -922,6 +922,9 @@ DltReturnValue dlt_client_send_ctrl_msg_v2(DltClient *client, char *apid, char *
     uint32_t id;
     uint8_t appidlen;
     uint8_t ctxidlen;
+    char ecid_buf[DLT_V2_ID_SIZE];
+    char apid_buf[DLT_V2_ID_SIZE];
+    char ctid_buf[DLT_V2_ID_SIZE];
 
     if ((client == 0) || (client->sock < 0) || (apid == NULL) || (ctid == NULL))
         return DLT_RETURN_ERROR;
@@ -1058,7 +1061,6 @@ DltReturnValue dlt_client_send_ctrl_msg_v2(DltClient *client, char *apid, char *
     if (DLT_IS_HTYP2_WEID(msg.baseheaderv2->htyp2)) {
         msg.extendedheaderv2.ecidlen = client->ecuid2len;
         if (msg.extendedheaderv2.ecidlen > 0) {
-            char ecid_buf[DLT_V2_ID_SIZE];
             dlt_set_id_v2(ecid_buf, client->ecuid2, msg.extendedheaderv2.ecidlen);
             msg.extendedheaderv2.ecid = ecid_buf;
         } else {
@@ -1069,7 +1071,6 @@ DltReturnValue dlt_client_send_ctrl_msg_v2(DltClient *client, char *apid, char *
     if (DLT_IS_HTYP2_WACID(msg.baseheaderv2->htyp2)) {
         msg.extendedheaderv2.apidlen = appidlen;
         if (msg.extendedheaderv2.apidlen > 0) {
-            char apid_buf[DLT_V2_ID_SIZE];
             if (strcmp(apid, "") == 0) {
                 dlt_set_id_v2(apid_buf, DLT_CLIENT_DUMMY_APP_ID, msg.extendedheaderv2.apidlen);
             } else {
@@ -1082,7 +1083,6 @@ DltReturnValue dlt_client_send_ctrl_msg_v2(DltClient *client, char *apid, char *
         msg.extendedheaderv2.apidlen = appidlen;
         msg.extendedheaderv2.ctidlen = ctxidlen;
         if (msg.extendedheaderv2.ctidlen > 0) {
-            char ctid_buf[DLT_V2_ID_SIZE];
             if (strcmp(ctid, "") == 0) {
                 dlt_set_id_v2(ctid_buf, DLT_CLIENT_DUMMY_CON_ID, msg.extendedheaderv2.ctidlen);
             } else {

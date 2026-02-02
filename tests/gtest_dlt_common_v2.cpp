@@ -738,7 +738,7 @@ TEST(t_dlt_message_header_v2, normal)
         printf("%s \n", text);
     }
 
-    EXPECT_LE(DLT_RETURN_OK, dlt_file_free(&file, 0));
+    EXPECT_LE(DLT_RETURN_OK, dlt_file_free_v2(&file, 0));
 }
 
 TEST(t_dlt_message_header_v2, nullpointer)

@@ -5319,7 +5319,7 @@ DltReturnValue dlt_user_log_send_log(DltContextData *log, const int mtype, int *
 
 DltReturnValue dlt_user_log_send_log_v2(DltContextData *log, const int mtype, DltHtyp2ContentType msgcontent, int *const sent_size)
 {
-    DltMessageV2 msg;
+    DltMessageV2 msg = {0};
     DltUserHeader userheader;
     uint32_t len;
 
@@ -5504,9 +5504,7 @@ DltReturnValue dlt_user_log_send_log_v2(DltContextData *log, const int mtype, Dl
     if (DLT_IS_HTYP2_WEID(msg.baseheaderv2->htyp2)) {
         msg.extendedheaderv2.ecidlen = dlt_user.ecuID2len;
         if (msg.extendedheaderv2.ecidlen > 0) {
-            char ecid_buf[DLT_V2_ID_SIZE];
-            dlt_set_id_v2(ecid_buf, dlt_user.ecuID2, msg.extendedheaderv2.ecidlen);
-            msg.extendedheaderv2.ecid = ecid_buf;
+            msg.extendedheaderv2.ecid = dlt_user.ecuID2;
         } else {
             msg.extendedheaderv2.ecid = NULL;
         }
@@ -5515,18 +5513,14 @@ DltReturnValue dlt_user_log_send_log_v2(DltContextData *log, const int mtype, Dl
     if (DLT_IS_HTYP2_WACID(msg.baseheaderv2->htyp2)) {
         msg.extendedheaderv2.apidlen = dlt_user.appID2len;
         if (msg.extendedheaderv2.apidlen > 0) {
-            char apid_buf[DLT_V2_ID_SIZE];
-            dlt_set_id_v2(apid_buf, dlt_user.appID2, msg.extendedheaderv2.apidlen);
-            msg.extendedheaderv2.apid = apid_buf;
+            msg.extendedheaderv2.apid = dlt_user.appID2;
         } else {
             msg.extendedheaderv2.apid = NULL;
         }
 
         msg.extendedheaderv2.ctidlen = log->handle->contextID2len;
         if (msg.extendedheaderv2.ctidlen > 0) {
-            char ctid_buf[DLT_V2_ID_SIZE];
-            dlt_set_id_v2(ctid_buf, log->handle->contextID2, msg.extendedheaderv2.ctidlen);
-            msg.extendedheaderv2.ctid = ctid_buf;
+            msg.extendedheaderv2.ctid = log->handle->contextID2;
         } else {
             msg.extendedheaderv2.ctid = NULL;
         }
@@ -5542,9 +5536,7 @@ DltReturnValue dlt_user_log_send_log_v2(DltContextData *log, const int mtype, Dl
     if (DLT_IS_HTYP2_WSFLN(msg.baseheaderv2->htyp2)) {
         msg.extendedheaderv2.finalen = dlt_user.filenamelen;
         if (msg.extendedheaderv2.finalen > 0) {
-            char fina_buf[DLT_V2_ID_SIZE];
-            dlt_set_id_v2(fina_buf, dlt_user.filename, msg.extendedheaderv2.finalen);
-            msg.extendedheaderv2.fina = fina_buf;
+            msg.extendedheaderv2.fina = dlt_user.filename;
         } else {
             msg.extendedheaderv2.fina = NULL;
         }
@@ -6556,11 +6548,12 @@ DltReturnValue dlt_user_print_msg_v2(DltMessageV2 *msg, DltContextData *log)
 
 int dlt_get_extendedheadersize_v2(DltUser dlt_user_param, int contextIDSize) {
     int size = 0;
-    size += (((int)dlt_user_param.ecuID2len)+1)*((int)dlt_user_param.with_ecu_id);
+    /* Each variable-length field is: 1 byte length + N bytes data (NO null terminator) */
+    size += (1 + ((int)dlt_user_param.ecuID2len))*((int)dlt_user_param.with_ecu_id);
     size += (int)(sizeof(uint32_t))*((int)dlt_user_param.with_session_id);
-    size += (((int)dlt_user_param.appID2len)+1+(contextIDSize)+1)*((int)dlt_user_param.with_app_and_context_id);
-    size += (((int)dlt_user_param.filenamelen)+1+(int)sizeof(dlt_user_param.linenumber))*((int)dlt_user_param.with_filename_and_line_number);
-    size += (((int)dlt_user_param.tagbuffersize)+1)*((int)dlt_user_param.with_tags);
+    size += (1 + ((int)dlt_user_param.appID2len) + 1 + (contextIDSize))*((int)dlt_user_param.with_app_and_context_id);
+    size += (1 + ((int)dlt_user_param.filenamelen) + (int)sizeof(dlt_user_param.linenumber))*((int)dlt_user_param.with_filename_and_line_number);
+    size += (1 + ((int)dlt_user_param.tagbuffersize))*((int)dlt_user_param.with_tags);
     size += (int)(sizeof(dlt_user_param.prlv))*((int)dlt_user_param.with_privacy_level);
     //To Update: 8 with segmentation data size depending on type of frame (8, 4 or 0)
     size += ((int)(sizeof(uint8_t))+(int)(sizeof(uint8_t))+8)*((int)dlt_user_param.with_segmentation);

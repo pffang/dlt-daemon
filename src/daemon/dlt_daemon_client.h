@@ -64,6 +64,8 @@
 #include <dlt_offline_trace.h>
 #include <sys/time.h>
 
+#define MSGCONTENT_MASK 0x03
+
 /**
  * Send out message to client or store message in offline trace.
  * @param sock connection handle used for sending response

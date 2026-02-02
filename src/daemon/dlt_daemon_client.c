@@ -66,6 +66,9 @@
 
 #include "dlt_daemon_offline_logstorage.h"
 #include "dlt_gateway.h"
+#ifdef UDP_CONNECTION_SUPPORT
+#   include "dlt_daemon_udp_socket.h"
+#endif
 
 /** Inline function to calculate/set the requested log level or traces status
  *  with default log level or trace status when "ForceContextLogLevelAndTraceStatus"
@@ -80,10 +83,6 @@ static inline int8_t getStatus(uint8_t request_log, int context_log)
 {
     return (int8_t)((request_log <= context_log) ? request_log : context_log);
 }
-
-#ifdef UDP_CONNECTION_SUPPORT
-#   include "dlt_daemon_udp_socket.h"
-#endif
 
 /** @brief Sends up to 2 messages to all the clients.
  *
@@ -593,6 +592,9 @@ int dlt_daemon_client_send_message_to_all_client_v2(DltDaemon *daemon,
         daemon_local->msgv2.extendedheadersizev2 = dlt_message_get_extendedparameters_size_v2(&(daemon_local->msgv2));
     }
 
+    /* Save old storage header size before we recalculate it */
+    uint32_t old_storage_size = daemon_local->msgv2.storageheadersizev2;
+    
     /* prepare storage header */
     if (DLT_IS_HTYP2_WEID(daemon_local->msgv2.baseheaderv2->htyp2)) {
         ecu_ptr = daemon_local->msgv2.extendedheaderv2.ecid;
@@ -627,13 +629,36 @@ int dlt_daemon_client_send_message_to_all_client_v2(DltDaemon *daemon,
         return DLT_RETURN_ERROR;
     }
 
+    /* Copy base header + base header extra from temp buffer (skip old storage header) */
     memcpy(new_headerbufferv2 + daemon_local->msgv2.storageheadersizev2,
-           temp_buffer, (daemon_local->msgv2.baseheadersizev2 + daemon_local->msgv2.baseheaderextrasizev2));
+           temp_buffer + old_storage_size,
+           (daemon_local->msgv2.baseheadersizev2 + daemon_local->msgv2.baseheaderextrasizev2));
+    
+    /* Copy extended header from temp buffer */
+    uint32_t old_extended_offset = old_storage_size + daemon_local->msgv2.baseheadersizev2 + daemon_local->msgv2.baseheaderextrasizev2;
+    uint32_t new_extended_offset = daemon_local->msgv2.storageheadersizev2 + daemon_local->msgv2.baseheadersizev2 + daemon_local->msgv2.baseheaderextrasizev2;
+    memcpy(new_headerbufferv2 + new_extended_offset,
+           temp_buffer + old_extended_offset,
+           temp_extended_size);
+    
     free(temp_buffer);
 
     /* free the original header buffer and install the new one */
     free(daemon_local->msgv2.headerbufferv2);
     daemon_local->msgv2.headerbufferv2 = new_headerbufferv2;
+
+    /* Update baseheaderv2 pointer to point into the new buffer */
+    daemon_local->msgv2.baseheaderv2 = (DltBaseHeaderV2 *)(new_headerbufferv2 + daemon_local->msgv2.storageheadersizev2);
+
+    /* Re-parse extended parameters from the new buffer to update pointers */
+    DltHtyp2ContentType msgcontent = daemon_local->msgv2.baseheaderv2->htyp2 & MSGCONTENT_MASK;
+    if (dlt_message_get_extendedparameters_from_recievedbuffer_v2(&(daemon_local->msgv2),
+                                                                   new_headerbufferv2 + daemon_local->msgv2.storageheadersizev2,
+                                                                   msgcontent) != DLT_RETURN_OK) {
+        dlt_vlog(LOG_WARNING,
+                    "%s: failed to get message extended parameters.\n", __func__);
+        return DLT_DAEMON_ERROR_UNKNOWN;
+    }
 
     if (dlt_message_set_extendedparameters_v2(&(daemon_local->msgv2))) {
         dlt_vlog(LOG_WARNING,
@@ -767,6 +792,9 @@ int dlt_daemon_client_send_control_message_v2(int sock,
     int32_t len;
     uint8_t appidlen;
     uint8_t ctxidlen;
+    char ecid_buf[DLT_V2_ID_SIZE];
+    char apid_buf[DLT_V2_ID_SIZE];
+    char ctid_buf[DLT_V2_ID_SIZE];
 
     PRINT_FUNCTION_VERBOSE(verbose);
 
@@ -878,21 +906,37 @@ int dlt_daemon_client_send_control_message_v2(int sock,
     /* Fill out extended header */
     if (DLT_IS_HTYP2_WEID(msg->baseheaderv2->htyp2)) {
         msg->extendedheaderv2.ecidlen = daemon->ecuid2len;
-        dlt_set_id_v2(msg->extendedheaderv2.ecid, daemon->ecuid2, msg->extendedheaderv2.ecidlen);
+        if (msg->extendedheaderv2.ecidlen > 0) {
+            dlt_set_id_v2(ecid_buf, daemon->ecuid2, msg->extendedheaderv2.ecidlen);
+            msg->extendedheaderv2.ecid = ecid_buf;
+        } else {
+            msg->extendedheaderv2.ecid = NULL;
+        }
     }
 
     if (DLT_IS_HTYP2_WACID(msg->baseheaderv2->htyp2)) {
         msg->extendedheaderv2.apidlen = appidlen;
-        if (apid == NULL) {
-            dlt_set_id_v2(msg->extendedheaderv2.apid, DLT_DAEMON_CTRL_APID, msg->extendedheaderv2.apidlen);
+        if (msg->extendedheaderv2.apidlen > 0) {
+            if (apid == NULL) {
+                dlt_set_id_v2(apid_buf, DLT_DAEMON_CTRL_APID, msg->extendedheaderv2.apidlen);
+            } else {
+                dlt_set_id_v2(apid_buf, apid, msg->extendedheaderv2.apidlen);
+            }
+            msg->extendedheaderv2.apid = apid_buf;
         } else {
-            dlt_set_id_v2(msg->extendedheaderv2.apid, apid, msg->extendedheaderv2.apidlen);
+            msg->extendedheaderv2.apid = NULL;
         }
+
         msg->extendedheaderv2.ctidlen = ctxidlen;
-        if (ctid == NULL) {
-            dlt_set_id_v2(msg->extendedheaderv2.ctid, DLT_DAEMON_CTRL_CTID, msg->extendedheaderv2.ctidlen);
+        if (msg->extendedheaderv2.ctidlen > 0) {
+            if (ctid == NULL) {
+                dlt_set_id_v2(ctid_buf, DLT_DAEMON_CTRL_CTID, msg->extendedheaderv2.ctidlen);
+            } else {
+                dlt_set_id_v2(ctid_buf, ctid, msg->extendedheaderv2.ctidlen);
+            }
+            msg->extendedheaderv2.ctid = ctid_buf;
         } else {
-            dlt_set_id_v2(msg->extendedheaderv2.ctid, ctid, msg->extendedheaderv2.ctidlen);
+            msg->extendedheaderv2.ctid = NULL;
         }
     }
 

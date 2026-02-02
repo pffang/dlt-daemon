@@ -221,6 +221,11 @@
  */
 #   define DLT_V2_ID_SIZE 255
 
+/**
+ * The maximum display length for client ID output (truncate if longer)
+ */
+#   define DLT_CLIENT_MAX_ID_LENGTH 16
+
 #   define DLT_SIZE_WEID DLT_ID_SIZE
 #   define DLT_SIZE_WSID (sizeof(uint32_t))
 #   define DLT_SIZE_WTMS (sizeof(uint32_t))
@@ -1599,6 +1604,15 @@ DltReturnValue dlt_message_set_extendedparameters_v2(DltMessageV2 *msg);
  * @return negative value if there was an error
  */
 uint32_t dlt_message_get_extendedparameters_size_v2(DltMessageV2 *msg);
+
+/**
+ * DLTv2 Parse extended parameters from received buffer for DLTv2 messages
+ * @param msg pointer to structure of organising DLT messages
+ * @param buffer pointer to buffer containing the message
+ * @param msgcontent message content type
+ * @return Value from DltReturnValue enum
+ */
+DltReturnValue dlt_message_get_extendedparameters_from_recievedbuffer_v2(DltMessageV2 *msg, uint8_t* buffer, DltHtyp2ContentType msgcontent);
 
 /**
  * Initialise the structure used to access a DLT file.

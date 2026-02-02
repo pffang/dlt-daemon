@@ -2645,16 +2645,19 @@ int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local,
 
         uint32_t uiType;
         uint16_t uiSize;
+        char ecid_buf[DLT_V2_ID_SIZE];
+        char apid_buf[DLT_V2_ID_SIZE];
+        char ctid_buf[DLT_V2_ID_SIZE];
 
         DltHtyp2ContentType msgcontent = DLT_VERBOSE_DATA_MSG;
 
         PRINT_FUNCTION_VERBOSE(verbose);
 
-        msg.storageheadersizev2 = STORAGE_HEADER_V2_FIXED_SIZE + DLT_DAEMON_ECU_ID_LEN;
+        msg.storageheadersizev2 = (uint32_t)(STORAGE_HEADER_V2_FIXED_SIZE + strlen(DLT_DAEMON_ECU_ID));
         msg.baseheadersizev2 = BASE_HEADER_V2_FIXED_SIZE;
         msg.baseheaderextrasizev2 = (int32_t)dlt_message_get_extraparameters_size_v2(msgcontent);
         /* Ecu Id, App Id, Ctx Id and Session Id*/
-        msg.extendedheadersizev2 = (uint32_t)(DLT_DAEMON_ECU_ID_LEN + 1 + strlen(app_id) + 1 + strlen(ctx_id) + 1 + sizeof(uint32_t));
+        msg.extendedheadersizev2 = (uint32_t)(1 + strlen(DLT_DAEMON_ECU_ID) + 1 + strlen(app_id) + 1 + strlen(ctx_id) + sizeof(uint32_t));
 
         msg.headersizev2 = (int32_t) (msg.storageheadersizev2 +
                                        msg.baseheadersizev2 +
@@ -2663,7 +2666,7 @@ int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local,
 
         msg.headerbufferv2 = (uint8_t*)malloc((size_t)msg.headersizev2);
 
-        if (dlt_set_storageheader_v2(&(msg.storageheaderv2), DLT_DAEMON_ECU_ID_LEN, DLT_DAEMON_ECU_ID) != DLT_RETURN_OK)
+        if (dlt_set_storageheader_v2(&(msg.storageheaderv2), (uint8_t)strlen(DLT_DAEMON_ECU_ID), DLT_DAEMON_ECU_ID) != DLT_RETURN_OK)
             return DLT_RETURN_ERROR;
 
         if (dlt_message_set_storageparameters_v2(&msg, 0) != DLT_RETURN_OK)
@@ -2740,9 +2743,8 @@ int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local,
 
         /* Fill out extended header */
         if (DLT_IS_HTYP2_WEID(msg.baseheaderv2->htyp2)) {
-            msg.extendedheaderv2.ecidlen = DLT_DAEMON_ECU_ID_LEN;
+            msg.extendedheaderv2.ecidlen = (uint8_t)strlen(DLT_DAEMON_ECU_ID);
             if (msg.extendedheaderv2.ecidlen > 0) {
-                char ecid_buf[DLT_V2_ID_SIZE];
                 dlt_set_id_v2(ecid_buf, DLT_DAEMON_ECU_ID, msg.extendedheaderv2.ecidlen);
                 msg.extendedheaderv2.ecid = ecid_buf;
             } else {
@@ -2753,7 +2755,6 @@ int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local,
         if (DLT_IS_HTYP2_WACID(msg.baseheaderv2->htyp2)) {
             msg.extendedheaderv2.apidlen = (uint8_t)strlen(app_id);
             if (msg.extendedheaderv2.apidlen > 0) {
-                char apid_buf[DLT_V2_ID_SIZE];
                 dlt_set_id_v2(apid_buf, app_id, msg.extendedheaderv2.apidlen);
                 msg.extendedheaderv2.apid = apid_buf;
             } else {
@@ -2762,7 +2763,6 @@ int dlt_daemon_log_internal(DltDaemon *daemon, DltDaemonLocal *daemon_local,
 
             msg.extendedheaderv2.ctidlen = (uint8_t)strlen(ctx_id);
             if (msg.extendedheaderv2.ctidlen > 0) {
-                char ctid_buf[DLT_V2_ID_SIZE];
                 dlt_set_id_v2(ctid_buf, ctx_id, msg.extendedheaderv2.ctidlen);
                 msg.extendedheaderv2.ctid = ctid_buf;
             } else {
